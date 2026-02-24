@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
 	"path"
 	"reflect"
 	"strings"
@@ -57,6 +58,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case r.URL.Path == "/readyz":
 		h.serveReadyz(w, r)
+		return
+	}
+	if err := validateRequestPathPayload(r.URL); err != nil {
+		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 
@@ -790,6 +795,32 @@ func parseAddressbookPath(p string) (user, slug string, ok bool) {
 func isMaxBytesError(err error) bool {
 	var mbe *http.MaxBytesError
 	return errors.As(err, &mbe)
+}
+
+func validateRequestPathPayload(u *url.URL) error {
+	if u == nil {
+		return nil
+	}
+	escaped := u.EscapedPath()
+	if escaped == "" {
+		escaped = u.Path
+	}
+	for _, seg := range strings.Split(escaped, "/") {
+		if seg == "" {
+			continue
+		}
+		decoded, err := url.PathUnescape(seg)
+		if err != nil {
+			return fmt.Errorf("bad path escape: %w", err)
+		}
+		if decoded == "." || decoded == ".." {
+			return fmt.Errorf("path traversal segment")
+		}
+		if strings.Contains(decoded, "/") || strings.Contains(decoded, `\`) {
+			return fmt.Errorf("path separator in segment")
+		}
+	}
+	return nil
 }
 
 func isVCardContentType(v string) bool {

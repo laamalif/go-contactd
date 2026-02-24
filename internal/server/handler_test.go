@@ -207,6 +207,70 @@ func TestHandler_CardPut_RejectsMissingOrUnsupportedContentType(t *testing.T) {
 	}
 }
 
+func TestHandler_CardPath_RejectsEncodedSlashInHref(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/a%2Fb.vcf", bytes.NewBufferString(vcardBody("uid-a", "Alice A")))
+	req.Header.Set("Content-Type", "text/vcard")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("PUT encoded-slash href status = %d, want %d", got, want)
+	}
+}
+
+func TestHandler_CardPath_RejectsTraversalSegment(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/../evil.vcf", bytes.NewBufferString(vcardBody("uid-a", "Alice A")))
+	req.Header.Set("Content-Type", "text/vcard")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("PUT traversal-segment status = %d, want %d", got, want)
+	}
+}
+
+func TestHandler_CardPath_AllowsSafeFlatHrefWithDots(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	putReq := httptest.NewRequest(http.MethodPut, "/alice/contacts/a..b.vcf", bytes.NewBufferString(vcardBody("uid-a", "Alice A")))
+	putReq.Header.Set("Content-Type", "text/vcard")
+	putReq.SetBasicAuth("alice", "secret")
+	putRes := httptest.NewRecorder()
+	h.ServeHTTP(putRes, putReq)
+	if got, want := putRes.Code, http.StatusCreated; got != want {
+		t.Fatalf("PUT safe-flat href status = %d, want %d", got, want)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/alice/contacts/a..b.vcf", nil)
+	getReq.SetBasicAuth("alice", "secret")
+	getRes := httptest.NewRecorder()
+	h.ServeHTTP(getRes, getReq)
+	if got, want := getRes.Code, http.StatusOK; got != want {
+		t.Fatalf("GET safe-flat href status = %d, want %d", got, want)
+	}
+}
+
 func TestHandler_CardDelete_IfMatchEnforced(t *testing.T) {
 	t.Parallel()
 
