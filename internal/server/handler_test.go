@@ -869,6 +869,62 @@ func TestHandler_Report_SyncCollection_LimitUsesContinuationToken(t *testing.T) 
 	}
 }
 
+func TestHandler_Report_SyncCollection_StalePrunedTokenReturns403ValidSyncTokenError(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject a: %v", err)
+	}
+	svc := carddavx.NewSyncService(store)
+	baseline, err := svc.SyncCollection(context.Background(), "alice", "contacts", "", 0)
+	if err != nil {
+		t.Fatalf("SyncCollection baseline: %v", err)
+	}
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/b.vcf", mustSampleCard("uid-b", "Bob B"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject b: %v", err)
+	}
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/c.vcf", mustSampleCard("uid-c", "Carol C"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject c: %v", err)
+	}
+	if _, err := store.PruneCardChangesByMaxRevisions(context.Background(), 1); err != nil {
+		t.Fatalf("PruneCardChangesByMaxRevisions: %v", err)
+	}
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            svc,
+	})
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:sync-collection xmlns:D="DAV:">
+  <D:sync-token>` + baseline.SyncToken + `</D:sync-token>
+  <D:sync-level>1</D:sync-level>
+</D:sync-collection>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusForbidden; got != want {
+		t.Fatalf("sync-collection stale token status = %d, want %d", got, want)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/xml; charset=utf-8" {
+		t.Fatalf("sync-collection stale token content-type = %q", ct)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "valid-sync-token") {
+		t.Fatalf("sync-collection stale token body missing valid-sync-token: %q", body)
+	}
+}
+
 func openServerBackend(t *testing.T) (*db.Store, *contactcarddav.Backend) {
 	t.Helper()
 	store, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "contactd.sqlite"))

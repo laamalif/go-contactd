@@ -121,6 +121,14 @@ func (s *SyncService) SyncCollection(ctx context.Context, username, slug, rawTok
 	if err != nil {
 		return SyncResult{}, err
 	}
+	if token.Revision < ab.Revision {
+		if len(changes) == 0 {
+			return SyncResult{}, &invalidSyncTokenError{cause: fmt.Errorf("stale token")}
+		}
+		if changes[0].Revision > token.Revision+1 {
+			return SyncResult{}, &invalidSyncTokenError{cause: fmt.Errorf("stale token")}
+		}
+	}
 	tokenRevision := ab.Revision
 	if len(changes) > 0 {
 		lastRevision := changes[len(changes)-1].Revision
