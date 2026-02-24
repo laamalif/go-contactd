@@ -10,8 +10,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	contactcarddav "github.com/laamalif/go-contactd/internal/carddav"
@@ -65,9 +67,54 @@ func runServe(args []string, env map[string]string, stderr io.Writer) int {
 		Addr:    rt.cfg.ListenAddr,
 		Handler: rt.handler,
 	}
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return serveHTTPGracefully(sigCtx, srv, rt.logger)
+}
 
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		rt.logger.Error("listen failed", "event", "listen failed", "error", err)
+type serveHTTPServer interface {
+	ListenAndServe() error
+	Shutdown(context.Context) error
+}
+
+const serveShutdownTimeout = 5 * time.Second
+
+func serveHTTPGracefully(runCtx context.Context, srv serveHTTPServer, logger *slog.Logger) int {
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	serveDone := make(chan struct{})
+	shutdownDone := make(chan struct{})
+	var shutdownErr error
+	go func() {
+		defer close(shutdownDone)
+		select {
+		case <-runCtx.Done():
+			// If serving already ended, do not trigger a redundant shutdown from a later cancel/stop.
+			select {
+			case <-serveDone:
+				return
+			default:
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), serveShutdownTimeout)
+			defer cancel()
+			shutdownErr = srv.Shutdown(ctx)
+		case <-serveDone:
+			return
+		}
+	}()
+
+	err := srv.ListenAndServe()
+	close(serveDone)
+	<-shutdownDone
+
+	if shutdownErr != nil {
+		logger.Error("shutdown failed", "event", "shutdown failed", "error", shutdownErr)
+		return 1
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Error("listen failed", "event", "listen failed", "error", err)
 		return 1
 	}
 	return 0
