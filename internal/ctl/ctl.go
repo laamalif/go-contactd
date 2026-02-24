@@ -823,12 +823,57 @@ func putOrClassifyImportedCard(ctx context.Context, store *db.Store, addressbook
 }
 
 func decodeSingleCardBytes(raw []byte) (vcard.Card, error) {
+	if err := validateSingleVCardEnvelope(raw); err != nil {
+		return nil, err
+	}
 	dec := vcard.NewDecoder(bytes.NewReader(raw))
 	card, err := dec.Decode()
 	if err != nil {
 		return nil, err
 	}
-	return card, nil
+	if _, err := dec.Decode(); err != nil {
+		if errors.Is(err, io.EOF) {
+			return card, nil
+		}
+		return nil, err
+	}
+	return nil, fmt.Errorf("multiple vcards in single file")
+}
+
+func validateSingleVCardEnvelope(raw []byte) error {
+	norm := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	norm = strings.ReplaceAll(norm, "\r", "\n")
+	lines := strings.Split(norm, "\n")
+
+	seenBegin := false
+	seenEnd := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !seenBegin {
+			if trimmed == "" {
+				continue
+			}
+			if strings.EqualFold(trimmed, "BEGIN:VCARD") {
+				seenBegin = true
+				continue
+			}
+			return fmt.Errorf("unexpected data before BEGIN:VCARD")
+		}
+		if !seenEnd {
+			if strings.EqualFold(trimmed, "END:VCARD") {
+				seenEnd = true
+			}
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		return fmt.Errorf("unexpected trailing data after END:VCARD")
+	}
+	if !seenBegin || !seenEnd {
+		return fmt.Errorf("missing BEGIN:VCARD/END:VCARD envelope")
+	}
+	return nil
 }
 
 func resolvePasswordInput(password string, passwordStdin bool, stdin io.Reader) (string, error) {
