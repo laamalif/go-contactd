@@ -1,0 +1,430 @@
+package db
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"fmt"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+const schemaVersion = 1
+
+type Store struct {
+	db    *sql.DB
+	hooks TestHooks
+	now   func() time.Time
+}
+
+type TestHooks struct {
+	BeforeCardChangeInsert func() error
+}
+
+type PutCardInput struct {
+	AddressbookID int64
+	Href          string
+	UID           string
+	VCard         []byte
+}
+
+type PutCardResult struct {
+	Created  bool
+	ETagHex  string
+	Revision int64
+}
+
+type CardChange struct {
+	Href     string
+	ETagHex  string
+	Deleted  bool
+	Revision int64
+}
+
+func Open(ctx context.Context, path string) (*Store, error) {
+	dbh, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
+
+	store := &Store{
+		db:  dbh,
+		now: time.Now,
+	}
+
+	if err := store.applyPragmas(ctx); err != nil {
+		_ = dbh.Close()
+		return nil, err
+	}
+	if err := store.migrate(ctx); err != nil {
+		_ = dbh.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
+func (s *Store) Ready(ctx context.Context) error {
+	var one int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1`).Scan(&one); err != nil {
+		return fmt.Errorf("readiness query: %w", err)
+	}
+	if one != 1 {
+		return fmt.Errorf("readiness query returned %d", one)
+	}
+	return nil
+}
+
+func (s *Store) SetTestHooks(h TestHooks) {
+	s.hooks = h
+}
+
+func (s *Store) PragmaString(ctx context.Context, name string) (string, error) {
+	var v string
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf("PRAGMA %s;", name)).Scan(&v); err != nil {
+		return "", fmt.Errorf("pragma %s: %w", name, err)
+	}
+	return v, nil
+}
+
+func (s *Store) PragmaInt(ctx context.Context, name string) (int, error) {
+	var v int
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf("PRAGMA %s;", name)).Scan(&v); err != nil {
+		return 0, fmt.Errorf("pragma %s: %w", name, err)
+	}
+	return v, nil
+}
+
+func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO users (username, password_hash, created_at)
+		VALUES (?, ?, ?)
+	`, username, passwordHash, s.now().UTC())
+	if err != nil {
+		return 0, fmt.Errorf("insert user: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("user last insert id: %w", err)
+	}
+	return id, nil
+}
+
+func (s *Store) CreateAddressbook(ctx context.Context, userID int64, slug, displayname string) (int64, error) {
+	now := s.now().UTC()
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO addressbooks (user_id, slug, displayname, description, color, revision, created_at, updated_at)
+		VALUES (?, ?, ?, '', '', 0, ?, ?)
+	`, userID, slug, displayname, now, now)
+	if err != nil {
+		return 0, fmt.Errorf("insert addressbook: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("addressbook last insert id: %w", err)
+	}
+	return id, nil
+}
+
+func (s *Store) AddressbookRevision(ctx context.Context, addressbookID int64) (int64, error) {
+	var rev int64
+	if err := s.db.QueryRowContext(ctx, `SELECT revision FROM addressbooks WHERE id = ?`, addressbookID).Scan(&rev); err != nil {
+		return 0, fmt.Errorf("select addressbook revision: %w", err)
+	}
+	return rev, nil
+}
+
+func (s *Store) CardCount(ctx context.Context, addressbookID int64) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cards WHERE addressbook_id = ?`, addressbookID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count cards: %w", err)
+	}
+	return n, nil
+}
+
+func (s *Store) CardChangeCount(ctx context.Context, addressbookID int64) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM card_changes WHERE addressbook_id = ?`, addressbookID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count card_changes: %w", err)
+	}
+	return n, nil
+}
+
+func (s *Store) LastCardChange(ctx context.Context, addressbookID int64) (CardChange, error) {
+	var out CardChange
+	var deleted int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT href, COALESCE(etag, ''), deleted, revision
+		FROM card_changes
+		WHERE addressbook_id = ?
+		ORDER BY revision DESC, id DESC
+		LIMIT 1
+	`, addressbookID).Scan(&out.Href, &out.ETagHex, &deleted, &out.Revision); err != nil {
+		return CardChange{}, fmt.Errorf("select last card_change: %w", err)
+	}
+	out.Deleted = deleted != 0
+	return out, nil
+}
+
+func (s *Store) PutCard(ctx context.Context, in PutCardInput) (PutCardResult, error) {
+	if in.AddressbookID == 0 {
+		return PutCardResult{}, fmt.Errorf("addressbook_id is required")
+	}
+	if in.Href == "" || in.UID == "" {
+		return PutCardResult{}, fmt.Errorf("href and uid are required")
+	}
+	canonical := CanonicalizeVCard(in.VCard)
+	etagHex := ComputeETagHex(canonical)
+	now := s.now().UTC()
+
+	var out PutCardResult
+	err := s.withImmediateTx(ctx, func(conn *sql.Conn) error {
+		var existing int
+		if err := conn.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM cards WHERE addressbook_id = ? AND href = ?
+		`, in.AddressbookID, in.Href).Scan(&existing); err != nil {
+			return fmt.Errorf("check existing card: %w", err)
+		}
+
+		if existing == 0 {
+			if _, err := conn.ExecContext(ctx, `
+				INSERT INTO cards (addressbook_id, href, uid, etag, vcard_text, mod_time)
+				VALUES (?, ?, ?, ?, ?, ?)
+			`, in.AddressbookID, in.Href, in.UID, etagHex, canonical, now); err != nil {
+				return fmt.Errorf("insert card: %w", err)
+			}
+			out.Created = true
+		} else {
+			if _, err := conn.ExecContext(ctx, `
+				UPDATE cards
+				SET uid = ?, etag = ?, vcard_text = ?, mod_time = ?
+				WHERE addressbook_id = ? AND href = ?
+			`, in.UID, etagHex, canonical, now, in.AddressbookID, in.Href); err != nil {
+				return fmt.Errorf("update card: %w", err)
+			}
+			out.Created = false
+		}
+
+		if _, err := conn.ExecContext(ctx, `
+			UPDATE addressbooks
+			SET revision = revision + 1, updated_at = ?
+			WHERE id = ?
+		`, now, in.AddressbookID); err != nil {
+			return fmt.Errorf("bump addressbook revision: %w", err)
+		}
+		if err := conn.QueryRowContext(ctx, `
+			SELECT revision FROM addressbooks WHERE id = ?
+		`, in.AddressbookID).Scan(&out.Revision); err != nil {
+			return fmt.Errorf("select new revision: %w", err)
+		}
+
+		if s.hooks.BeforeCardChangeInsert != nil {
+			if err := s.hooks.BeforeCardChangeInsert(); err != nil {
+				return fmt.Errorf("before card_changes insert hook: %w", err)
+			}
+		}
+
+		if _, err := conn.ExecContext(ctx, `
+			INSERT INTO card_changes (addressbook_id, href, etag, deleted, revision, changed_at)
+			VALUES (?, ?, ?, 0, ?, ?)
+		`, in.AddressbookID, in.Href, etagHex, out.Revision, now); err != nil {
+			return fmt.Errorf("insert card_change: %w", err)
+		}
+
+		out.ETagHex = etagHex
+		return nil
+	})
+	if err != nil {
+		return PutCardResult{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteCard(ctx context.Context, addressbookID int64, href string) error {
+	if addressbookID == 0 || href == "" {
+		return fmt.Errorf("addressbook_id and href are required")
+	}
+	now := s.now().UTC()
+
+	return s.withImmediateTx(ctx, func(conn *sql.Conn) error {
+		var lastETag string
+		if err := conn.QueryRowContext(ctx, `
+			SELECT etag FROM cards WHERE addressbook_id = ? AND href = ?
+		`, addressbookID, href).Scan(&lastETag); err != nil {
+			return fmt.Errorf("select card etag for delete: %w", err)
+		}
+
+		if _, err := conn.ExecContext(ctx, `
+			DELETE FROM cards WHERE addressbook_id = ? AND href = ?
+		`, addressbookID, href); err != nil {
+			return fmt.Errorf("delete card: %w", err)
+		}
+
+		if _, err := conn.ExecContext(ctx, `
+			UPDATE addressbooks
+			SET revision = revision + 1, updated_at = ?
+			WHERE id = ?
+		`, now, addressbookID); err != nil {
+			return fmt.Errorf("bump addressbook revision on delete: %w", err)
+		}
+
+		var rev int64
+		if err := conn.QueryRowContext(ctx, `SELECT revision FROM addressbooks WHERE id = ?`, addressbookID).Scan(&rev); err != nil {
+			return fmt.Errorf("select revision after delete: %w", err)
+		}
+
+		if _, err := conn.ExecContext(ctx, `
+			INSERT INTO card_changes (addressbook_id, href, etag, deleted, revision, changed_at)
+			VALUES (?, ?, ?, 1, ?, ?)
+		`, addressbookID, href, lastETag, rev, now); err != nil {
+			return fmt.Errorf("insert delete card_change: %w", err)
+		}
+		return nil
+	})
+}
+
+func (s *Store) PruneCardChangesByAge(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM card_changes WHERE changed_at < ?`, cutoff.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("prune card_changes by age: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("prune rows affected: %w", err)
+	}
+	return n, nil
+}
+
+func (s *Store) ForceCardChangesTimestamp(ctx context.Context, addressbookID int64, ts time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE card_changes SET changed_at = ? WHERE addressbook_id = ?`, ts.UTC(), addressbookID)
+	if err != nil {
+		return fmt.Errorf("force card_changes timestamp: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) applyPragmas(ctx context.Context) error {
+	stmts := []string{
+		`PRAGMA foreign_keys = ON;`,
+		`PRAGMA journal_mode = WAL;`,
+		`PRAGMA synchronous = NORMAL;`,
+		`PRAGMA busy_timeout = 5000;`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("apply pragma %q: %w", stmt, err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) migrate(ctx context.Context) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS schema_migrations (
+			version INTEGER PRIMARY KEY
+		);`,
+		`CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS addressbooks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			slug TEXT NOT NULL,
+			displayname TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			color TEXT NOT NULL DEFAULT '',
+			revision INTEGER NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			UNIQUE (user_id, slug),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS cards (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			addressbook_id INTEGER NOT NULL,
+			href TEXT NOT NULL,
+			uid TEXT NOT NULL,
+			etag TEXT NOT NULL,
+			vcard_text BLOB NOT NULL,
+			mod_time TIMESTAMP NOT NULL,
+			UNIQUE (addressbook_id, href),
+			UNIQUE (addressbook_id, uid),
+			FOREIGN KEY (addressbook_id) REFERENCES addressbooks(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS card_changes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			addressbook_id INTEGER NOT NULL,
+			href TEXT NOT NULL,
+			etag TEXT,
+			deleted INTEGER NOT NULL,
+			revision INTEGER NOT NULL,
+			changed_at TIMESTAMP NOT NULL,
+			FOREIGN KEY (addressbook_id) REFERENCES addressbooks(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_cards_addressbook_mod_time ON cards(addressbook_id, mod_time);`,
+		`CREATE INDEX IF NOT EXISTS idx_cards_addressbook_uid ON cards(addressbook_id, uid);`,
+		`CREATE INDEX IF NOT EXISTS idx_card_changes_addressbook_revision ON card_changes(addressbook_id, revision);`,
+		`INSERT OR IGNORE INTO schema_migrations (version) VALUES (` + fmt.Sprintf("%d", schemaVersion) + `);`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migration statement failed: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) withImmediateTx(ctx context.Context, fn func(*sql.Conn) error) (err error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("db conn: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("begin immediate: %w", err)
+	}
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+	}()
+
+	if err := fn(conn); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func CanonicalizeVCard(in []byte) []byte {
+	if len(in) == 0 {
+		return nil
+	}
+	out := bytes.ReplaceAll(in, []byte("\r\n"), []byte("\n"))
+	out = bytes.ReplaceAll(out, []byte("\r"), []byte("\n"))
+	out = bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n"))
+	return out
+}
+
+func ComputeETagHex(canonical []byte) string {
+	sum := sha256.Sum256(canonical)
+	return hex.EncodeToString(sum[:])
+}
