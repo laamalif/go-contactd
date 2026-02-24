@@ -371,8 +371,8 @@ func TestRunMain_NoArgsDefaultsToServe(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("runMain(no args) code = %d, want 2 startup failure from serve path", code)
 	}
-	if got := stderr.String(); !strings.Contains(got, "startup error:") {
-		t.Fatalf("stderr = %q, want startup error (daemon dispatch path)", got)
+	if got := stderr.String(); !strings.Contains(got, "go-contactd:") {
+		t.Fatalf("stderr = %q, want daemon-style fatal error prefix", got)
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
@@ -387,8 +387,25 @@ func TestRunMain_FlagArgsDispatchToServe(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("runMain(-d <dir>) code = %d, want 2 startup failure from serve path", code)
 	}
-	if got := stderr.String(); !strings.Contains(got, "startup error:") {
-		t.Fatalf("stderr = %q, want startup error (serve dispatch)", got)
+	if got := stderr.String(); !strings.Contains(got, "go-contactd:") {
+		t.Fatalf("stderr = %q, want daemon-style fatal error prefix", got)
+	}
+}
+
+func TestRunMain_StartupFailure_NoDuplicateStructuredLog(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := runMain([]string{"-d", t.TempDir()}, map[string]string{}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("runMain startup failure code = %d, want 2", code)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, "go-contactd: open db:") {
+		t.Fatalf("stderr = %q, want daemon-style open db error", out)
+	}
+	if strings.Contains(out, `event="db error"`) || strings.Contains(out, `level=ERROR`) {
+		t.Fatalf("stderr should not include structured startup log duplicate, got %q", out)
 	}
 }
 

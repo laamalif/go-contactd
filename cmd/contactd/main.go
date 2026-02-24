@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -74,7 +75,7 @@ func cliModeForProgram(base string) cliMode {
 
 func runDaemonCLI(prog string, args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return runServe(nil, env, stderr)
+		return runServeNamed(prog, nil, env, stderr)
 	}
 	if args[0] == "--version" || args[0] == "-V" {
 		return runVersion(nil, stdout, stderr)
@@ -88,7 +89,7 @@ func runDaemonCLI(prog string, args []string, env map[string]string, stdin io.Re
 			printDaemonHelp(stdout, prog)
 			return 0
 		}
-		return runServe(args, env, stderr)
+		return runServeNamed(prog, args, env, stderr)
 	}
 
 	switch args[0] {
@@ -97,7 +98,7 @@ func runDaemonCLI(prog string, args []string, env map[string]string, stdin io.Re
 			printDaemonHelp(stdout, prog)
 			return 0
 		}
-		return runServe(args[1:], env, stderr)
+		return runServeNamed(prog, args[1:], env, stderr)
 	case "version": // backward compatibility alias (undocumented)
 		return runVersion(args[1:], stdout, stderr)
 	case "user": // backward compatibility alias (undocumented); prefer contactctl
@@ -178,15 +179,21 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func runServe(args []string, env map[string]string, stderr io.Writer) int {
+func runServeNamed(prog string, args []string, env map[string]string, stderr io.Writer) int {
 	if len(args) > 0 && (isHelpToken(args[0]) || args[0] == "help") {
 		printServeHelp(stderr)
 		return 0
 	}
-	rt, err := prepareServeRuntime(context.Background(), args, env, stderr)
+	var startupLogBuf bytes.Buffer
+	rt, err := prepareServeRuntime(context.Background(), args, env, &startupLogBuf)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "startup error: %v\n", err)
+		if stderr != nil {
+			_, _ = fmt.Fprintf(stderr, "%s: %v\n", prog, err)
+		}
 		return 2
+	}
+	if stderr != nil && startupLogBuf.Len() > 0 {
+		_, _ = io.Copy(stderr, &startupLogBuf)
 	}
 	defer func() { _ = rt.close() }()
 
