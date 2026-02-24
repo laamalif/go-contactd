@@ -109,6 +109,59 @@ func TestRunCLI_ExportDir_DryRun_DoesNotWriteFiles(t *testing.T) {
 	}
 }
 
+func TestRunCLI_Export_AddressbookNotFoundReturns3(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedExportTestDB(t)
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"export",
+		"--username", "alice",
+		"--book", "missing",
+		"--format", "dir",
+		"--out", filepath.Join(t.TempDir(), "out"),
+		"-d", dbPath,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 3 {
+		t.Fatalf("code=%d want 3 stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := strings.TrimSpace(stderr.String()); got != "not found" {
+		t.Fatalf("stderr=%q want %q", got, "not found")
+	}
+}
+
+func TestRunCLI_ExportDir_WriteFailureReturns1(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedExportTestDB(t)
+	outPath := filepath.Join(t.TempDir(), "out-as-file")
+	if err := os.WriteFile(outPath, []byte("not-a-directory"), 0o600); err != nil {
+		t.Fatalf("WriteFile out-as-file: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"export",
+		"--username", "alice",
+		"--format", "dir",
+		"--out", outPath,
+		"-d", dbPath,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 1 {
+		t.Fatalf("code=%d want 1 stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "io error:") {
+		t.Fatalf("stderr=%q want io error", got)
+	}
+}
+
 func TestRunCLI_ImportDir_ImportsVCFFiles(t *testing.T) {
 	t.Parallel()
 
@@ -258,6 +311,88 @@ func TestRunCLI_ImportConcatFile_UsesUIDForHref(t *testing.T) {
 	}
 	if cards[0].Href != "uid-a.vcf" || cards[1].Href != "uid-z.vcf" {
 		t.Fatalf("hrefs=%q,%q want uid-a.vcf,uid-z.vcf", cards[0].Href, cards[1].Href)
+	}
+}
+
+func TestRunCLI_ImportDir_InvalidVCardReturnsError(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedEmptyImportTestDB(t)
+	srcDir := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(srcDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "bad.vcf"), []byte("not a vcard"), 0o600); err != nil {
+		t.Fatalf("WriteFile bad.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"import",
+		"--username", "alice",
+		"-d", dbPath,
+		srcDir,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 1 {
+		t.Fatalf("code=%d want 1 stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "import error:") || !strings.Contains(got, "decode import file bad.vcf") {
+		t.Fatalf("stderr=%q want import decode error", got)
+	}
+}
+
+func TestRunCLI_ImportDir_UIDConflictReturnsError(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedEmptyImportTestDB(t)
+	store, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("db.Open seed conflict: %v", err)
+	}
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), "alice", "contacts")
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("GetAddressbookByUsernameSlug: %v", err)
+	}
+	if _, err := store.PutCard(context.Background(), db.PutCardInput{
+		AddressbookID: ab.ID,
+		Href:          "existing.vcf",
+		UID:           "uid-conflict",
+		VCard:         []byte("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-conflict\r\nFN:Existing\r\nEND:VCARD\r\n"),
+	}); err != nil {
+		_ = store.Close()
+		t.Fatalf("PutCard existing: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+
+	srcDir := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(srcDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "new.vcf"), []byte("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-conflict\r\nFN:New\r\nEND:VCARD\r\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile new.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"import",
+		"--username", "alice",
+		"-d", dbPath,
+		srcDir,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 1 {
+		t.Fatalf("code=%d want 1 stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "import error:") || !strings.Contains(got, "put card new.vcf") {
+		t.Fatalf("stderr=%q want import put-card error", got)
 	}
 }
 

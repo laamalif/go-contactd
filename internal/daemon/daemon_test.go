@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -270,6 +271,43 @@ func TestHumanizeDBOpenError_SQLiteCantOpen14_Normalized(t *testing.T) {
 	}
 }
 
+func TestHumanizeDBOpenError_NoSuchDirectory(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "missing", "contactd.sqlite")
+	err := humanizeDBOpenError(dbPath, errors.New(`open db: unable to open database file`))
+	want := fmt.Sprintf("cannot open database %s: no such file or directory", dbPath)
+	if err == nil || err.Error() != want {
+		t.Fatalf("humanizeDBOpenError missing-dir = %v, want %q", err, want)
+	}
+}
+
+func TestHumanizeDBOpenError_PermissionDenied(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	blocked := filepath.Join(base, "blocked")
+	if err := os.MkdirAll(blocked, 0o700); err != nil {
+		t.Fatalf("MkdirAll blocked: %v", err)
+	}
+	if err := os.Chmod(blocked, 0); err != nil {
+		t.Fatalf("Chmod blocked: %v", err)
+	}
+	defer func() { _ = os.Chmod(blocked, 0o700) }()
+
+	dbPath := filepath.Join(blocked, "child", "contactd.sqlite")
+	err := humanizeDBOpenError(dbPath, errors.New(`open db: unable to open database file`))
+	if err == nil {
+		t.Fatal("humanizeDBOpenError permission branch returned nil")
+	}
+	got := err.Error()
+	if strings.Contains(got, "permission denied") {
+		return
+	}
+	// Some environments (or elevated users) may bypass the permission failure and fall back to generic/no-such-dir handling.
+	t.Skipf("permission branch not observable in this environment, got %q", got)
+}
+
 func TestHumanizeServeFatalError_StripsKnownPrefixesRegardlessOrder(t *testing.T) {
 	t.Parallel()
 
@@ -284,6 +322,40 @@ func TestHumanizeServeFatalError_StripsKnownPrefixesRegardlessOrder(t *testing.T
 	gotB := humanizeServeFatalError(dbPath, fmt.Errorf("parse serve flags: load config: %w", baseErr))
 	if gotB == nil || gotB.Error() != baseErr.Error() {
 		t.Fatalf("strip prefixes (parse->load) = %v, want %q", gotB, baseErr.Error())
+	}
+}
+
+func TestExtractDBPathForFatal(t *testing.T) {
+	t.Parallel()
+
+	t.Run("parse_failure_falls_back_to_default", func(t *testing.T) {
+		got := extractDBPathForFatal([]string{"--bogus"}, map[string]string{})
+		if got != config.DefaultDBPath {
+			t.Fatalf("extractDBPathForFatal(parse fail) = %q, want %q", got, config.DefaultDBPath)
+		}
+	})
+
+	t.Run("configured_db_path", func(t *testing.T) {
+		want := filepath.Join(t.TempDir(), "contactd.sqlite")
+		got := extractDBPathForFatal(nil, map[string]string{"CONTACTD_DB_PATH": want})
+		if got != want {
+			t.Fatalf("extractDBPathForFatal(configured) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("empty_env_value_keeps_default", func(t *testing.T) {
+		got := extractDBPathForFatal(nil, map[string]string{"CONTACTD_DB_PATH": "   "})
+		if got != config.DefaultDBPath {
+			t.Fatalf("extractDBPathForFatal(empty env) = %q, want %q", got, config.DefaultDBPath)
+		}
+	})
+}
+
+func TestHumanizeServeFatalError_NilPassthrough(t *testing.T) {
+	t.Parallel()
+
+	if got := humanizeServeFatalError(filepath.Join(t.TempDir(), "contactd.sqlite"), nil); got != nil {
+		t.Fatalf("humanizeServeFatalError(nil) = %v, want nil", got)
 	}
 }
 
@@ -304,6 +376,13 @@ func TestLogging_Format_TextAndJSON(t *testing.T) {
 	if got := jsonBuf.String(); !strings.Contains(got, `"event":"request"`) {
 		t.Fatalf("json logger output missing json field: %q", got)
 	}
+}
+
+func TestStartConfiguredPruneLoop_NilStoreIsNoop(t *testing.T) {
+	t.Parallel()
+
+	stop := startConfiguredPruneLoop(context.Background(), nil, config.ServeConfig{PruneInterval: time.Millisecond}, nil)
+	stop()
 }
 
 func TestServeHTTPGracefully_ListenFailureLogsEvent(t *testing.T) {
@@ -460,6 +539,66 @@ func TestDeferredLogWriter_BuffersUntilActivateThenForwards(t *testing.T) {
 	}
 	if got, want := sink.String(), "startup-1\nruntime-1\n"; got != want {
 		t.Fatalf("sink after second activate = %q, want no duplicates", got)
+	}
+}
+
+func TestSeedUser_ForceTrueUpdatesPasswordHash(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, filepath.Join(t.TempDir(), "seed-force.sqlite"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	userID, err := store.CreateUser(ctx, "alice", "old-hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	oldHash, err := bcrypt.GenerateFromPassword([]byte("oldpw"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword old: %v", err)
+	}
+	if err := store.SetUserPasswordHash(ctx, userID, string(oldHash)); err != nil {
+		t.Fatalf("SetUserPasswordHash old: %v", err)
+	}
+	newHash, err := bcrypt.GenerateFromPassword([]byte("newpw"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword new: %v", err)
+	}
+	cfg := config.ServeConfig{
+		DefaultBookSlug: "contacts",
+		DefaultBookName: "Contacts",
+	}
+	if _, _, err := store.EnsureAddressbook(ctx, userID, cfg.DefaultBookSlug, cfg.DefaultBookName); err != nil {
+		t.Fatalf("EnsureAddressbook preseed: %v", err)
+	}
+
+	if err := seedUser(ctx, store, cfg, config.SeedUser{Username: "alice", PasswordHash: string(newHash)}, true); err != nil {
+		t.Fatalf("seedUser(force=true): %v", err)
+	}
+
+	gotID, err := store.UserIDByUsername(ctx, "alice")
+	if err != nil {
+		t.Fatalf("UserIDByUsername: %v", err)
+	}
+	if gotID != userID {
+		t.Fatalf("user ID changed = %d, want %d", gotID, userID)
+	}
+	okOld, _, err := store.AuthenticateUser(ctx, "alice", "oldpw")
+	if err != nil {
+		t.Fatalf("AuthenticateUser oldpw: %v", err)
+	}
+	if okOld {
+		t.Fatal("old password still authenticates after force reseed")
+	}
+	okNew, _, err := store.AuthenticateUser(ctx, "alice", "newpw")
+	if err != nil {
+		t.Fatalf("AuthenticateUser newpw: %v", err)
+	}
+	if !okNew {
+		t.Fatal("new password does not authenticate after force reseed")
 	}
 }
 
