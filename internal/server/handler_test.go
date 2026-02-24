@@ -434,6 +434,9 @@ func TestHandler_CardPut_OversizeBodyReturns413(t *testing.T) {
 	if got, want := rr.Code, http.StatusRequestEntityTooLarge; got != want {
 		t.Fatalf("PUT oversize status = %d, want %d", got, want)
 	}
+	if body, want := rr.Body.String(), http.StatusText(http.StatusRequestEntityTooLarge)+"\n"; body != want {
+		t.Fatalf("PUT oversize body = %q, want %q", body, want)
+	}
 }
 
 func TestHandler_CardPut_ExceedsVCardMaxButWithinRequestMax_Returns413(t *testing.T) {
@@ -687,6 +690,9 @@ func TestHandler_Propfind_OversizeBodyReturns413(t *testing.T) {
 	if got, want := rr.Code, http.StatusRequestEntityTooLarge; got != want {
 		t.Fatalf("PROPFIND oversize status = %d, want %d", got, want)
 	}
+	if body, want := rr.Body.String(), http.StatusText(http.StatusRequestEntityTooLarge)+"\n"; body != want {
+		t.Fatalf("PROPFIND oversize body = %q, want %q", body, want)
+	}
 }
 
 func TestHandler_Propfind_AddressbookPath_RejectsTraversalSegment(t *testing.T) {
@@ -778,6 +784,9 @@ func TestHandler_Propfind_MalformedOversizeBodyReturns413(t *testing.T) {
 
 	if got, want := rr.Code, http.StatusRequestEntityTooLarge; got != want {
 		t.Fatalf("PROPFIND malformed oversize status = %d, want %d", got, want)
+	}
+	if body, want := rr.Body.String(), http.StatusText(http.StatusRequestEntityTooLarge)+"\n"; body != want {
+		t.Fatalf("PROPFIND malformed oversize body = %q, want %q", body, want)
 	}
 }
 
@@ -952,6 +961,9 @@ func TestHandler_Report_OversizeBodyReturns413(t *testing.T) {
 	if got, want := rr.Code, http.StatusRequestEntityTooLarge; got != want {
 		t.Fatalf("REPORT oversize status = %d, want %d", got, want)
 	}
+	if body, want := rr.Body.String(), http.StatusText(http.StatusRequestEntityTooLarge)+"\n"; body != want {
+		t.Fatalf("REPORT oversize body = %q, want %q", body, want)
+	}
 }
 
 func TestHandler_Report_AddressbookPath_RejectsTraversalSegment(t *testing.T) {
@@ -1040,6 +1052,9 @@ func TestHandler_Report_MalformedOversizeBodyReturns413(t *testing.T) {
 
 	if got, want := rr.Code, http.StatusRequestEntityTooLarge; got != want {
 		t.Fatalf("REPORT malformed oversize status = %d, want %d", got, want)
+	}
+	if body, want := rr.Body.String(), http.StatusText(http.StatusRequestEntityTooLarge)+"\n"; body != want {
+		t.Fatalf("REPORT malformed oversize body = %q, want %q", body, want)
 	}
 }
 
