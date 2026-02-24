@@ -51,6 +51,8 @@ Compose assets:
 
 ## CLI Reference
 
+Manual pages are provided in `man/contactd.8` and `man/contactctl.8`.
+
 Primary binaries / modes:
 
 ```bash

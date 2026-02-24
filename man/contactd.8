@@ -1,0 +1,124 @@
+.Dd February 24, 2026
+.Dt CONTACTD 8
+.Os
+.Sh NAME
+.Nm contactd
+.Nd minimal CardDAV daemon using SQLite
+.Sh SYNOPSIS
+.Nm
+.Op Fl hV
+.Op Fl l Ar addr
+.Op Fl p Ar port
+.Op Fl d Ar path
+.Op Fl -base-url Ar url
+.Op Fl -log-level Ar level
+.Op Fl -log-format Ar fmt
+.Op Fl -trust-proxy-headers
+.Sh DESCRIPTION
+.Nm
+serves a CardDAV endpoint over HTTP and stores data in SQLite.
+It is intended to run behind a reverse proxy that terminates TLS.
+.Pp
+The daemon provides a single health endpoint,
+.Pa /health ,
+which performs an HTTP + SQLite check.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl h , Fl -help
+Print usage and exit.
+.It Fl V , Fl -version
+Print version and exit.
+.It Fl l , Fl -listen-addr Ar addr
+Listen address (for example
+.Sq :8080
+or
+.Sq 127.0.0.1:8080 ) .
+.It Fl p , Fl -port Ar port
+Convenience shorthand for listening on
+.Sq :PORT .
+Cannot be combined with
+.Fl l .
+.It Fl d , Fl -db-path Ar path
+SQLite database path.
+Default:
+.Pa /var/db/contactd.db .
+.It Fl -base-url Ar url
+Public base URL used for redirects (for example
+.Pa /.well-known/carddav ) .
+.It Fl -log-level Ar level
+Log level:
+.Cm debug ,
+.Cm info ,
+.Cm warn ,
+or
+.Cm error .
+.It Fl -log-format Ar fmt
+Log format:
+.Cm text
+(daemon-style) or
+.Cm json .
+.It Fl -trust-proxy-headers
+Trust
+.Dq X-Forwarded-*
+and related proxy headers for access-log remote address handling.
+Enable only behind a trusted reverse proxy.
+.El
+.Sh ENVIRONMENT
+Configuration precedence is:
+flags > environment > defaults.
+.Pp
+Common variables:
+.Bl -tag -width Ds
+.It Ev CONTACTD_LISTEN_ADDR
+Listen address.
+.It Ev PORT
+Fallback port if
+.Ev CONTACTD_LISTEN_ADDR
+is unset.
+.It Ev CONTACTD_DB_PATH
+SQLite database path.
+.It Ev CONTACTD_BASE_URL
+Public base URL for redirects.
+.It Ev CONTACTD_LOG_LEVEL
+Log level.
+.It Ev CONTACTD_LOG_FORMAT
+Log format
+.Pq Cm text Ns / Ns Cm json .
+.It Ev CONTACTD_TRUST_PROXY_HEADERS
+Trust proxy headers.
+.It Ev CONTACTD_REQUEST_MAX_BYTES
+Request body limit.
+.It Ev CONTACTD_VCARD_MAX_BYTES
+Maximum stored vCard size.
+.It Ev CONTACTD_USERS
+Bootstrap user seed (empty DB only, unless forced).
+.It Ev CONTACTD_FORCE_SEED
+Re-apply seed users even when the DB already has users.
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /var/db/contactd.db
+Default SQLite database path.
+.El
+.Sh EXAMPLES
+.Bl -bullet -compact
+.It
+Run on localhost:
+.Bd -literal -offset indent
+contactd -l 127.0.0.1:8080 -d /var/db/contactd.db
+.Ed
+.It
+Check daemon health:
+.Bd -literal -offset indent
+curl http://127.0.0.1:8080/health
+.Ed
+.El
+.Sh SEE ALSO
+.Xr contactctl 8
+.Sh AUTHORS
+Project uses
+.Lk https://github.com/emersion/go-webdav go-webdav
+and
+.Lk https://github.com/emersion/go-vcard go-vcard
+by Simon Ser
+.Pq emersion .

@@ -1,0 +1,143 @@
+.Dd February 24, 2026
+.Dt CONTACTCTL 8
+.Os
+.Sh NAME
+.Nm contactctl
+.Nd administration utility for contactd
+.Sh SYNOPSIS
+.Nm
+.Cm user
+.Aq add|list|delete|passwd
+.Op Ar args ...
+.Nm
+.Cm export
+.Op Ar flags ...
+.Nm
+.Cm import
+.Op Ar flags ...
+.Ar file-or-dir
+.Nm
+.Cm version
+.Op Fl -format Ar text|json
+.Sh DESCRIPTION
+.Nm
+manages users and imports/exports vCards for
+.Xr contactd 8 .
+It is intended for local administration and scripting.
+.Pp
+User-management subcommands operate directly on the SQLite database.
+The export/import commands are useful for backups, test fixtures, and cloning
+datasets across multiple users.
+.Sh COMMANDS
+.Bl -tag -width "import"
+.It Cm user add
+Create a user.
+Supports
+.Fl -password-stdin
+to avoid password exposure in process listings.
+.It Cm user list
+List users in table or JSON format.
+.It Cm user delete
+Delete a user by
+.Fl -username
+or
+.Fl -id .
+.It Cm user passwd
+Update a user's password by
+.Fl -username
+or
+.Fl -id .
+.It Cm export
+Export an addressbook as vCards.
+Directory mode writes one
+.Pa .vcf
+file per card; concat mode writes concatenated vCards.
+.It Cm import
+Import vCards from a directory of
+.Pa .vcf
+files or from a concatenated vCard file.
+Directory imports use the filename as the CardDAV href.
+Single-file imports use
+.Aq UID Ns Pa .vcf
+as the href.
+.El
+.Sh COMMON OPTIONS
+.Bl -tag -width Ds
+.It Fl d , Fl -db-path Ar path
+SQLite database path.
+Default:
+.Pa /var/db/contactd.db .
+.It Fl -db Ar path
+Alias for
+.Fl -db-path .
+.It Fl -dry-run
+Validate and summarize without writing files (export) or database changes (import).
+.It Fl V , Fl -version
+Print version and exit.
+.It Fl h , Fl -help
+Print help and exit.
+.El
+.Sh EXPORT
+.Bl -tag -width Ds
+.It Cm contactctl export Fl -username Ar user Op Fl -book Ar slug Op Fl -format Ar dir|concat Op Fl -out Ar path Op Fl -dry-run
+Export vCards from the selected addressbook.
+.Pp
+If
+.Fl -format Cm dir
+is used,
+.Fl -out
+must name a directory.
+Files are written with mode 0600.
+.Pp
+If
+.Fl -format Cm concat
+is used and
+.Fl -out
+is omitted, the vCard payload is written to standard output.
+.El
+.Sh IMPORT
+.Bl -tag -width Ds
+.It Cm contactctl import Fl -username Ar user Op Fl -book Ar slug Op Fl -dry-run Ar path
+Import vCards into the selected addressbook.
+.Pp
+If
+.Ar path
+is a directory, all
+.Pa *.vcf
+files are imported.
+If
+.Ar path
+is a file, concatenated vCards are parsed using
+.Dq go-vcard .
+.Pp
+Cards without a
+.Dq UID
+field are rejected.
+.El
+.Sh EXAMPLES
+.Bl -bullet -compact
+.It
+Create a user:
+.Bd -literal -offset indent
+printf '%s\en' 'secret' | contactctl user add --username alice --password-stdin
+.Ed
+.It
+Export a user's addressbook to a directory:
+.Bd -literal -offset indent
+contactctl export --username alice --format dir --out ./backup
+.Ed
+.It
+Preview an import without writing:
+.Bd -literal -offset indent
+contactctl import --username bob --dry-run ./backup
+.Ed
+.El
+.Sh SEE ALSO
+.Xr contactd 8
+.Sh AUTHORS
+Project uses
+.Lk https://github.com/emersion/go-webdav go-webdav
+and
+.Lk https://github.com/emersion/go-vcard go-vcard
+by Simon Ser
+.Pq emersion .
