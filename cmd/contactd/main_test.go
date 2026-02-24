@@ -513,6 +513,179 @@ func TestRunMain_Version_InvalidFormatReturns2(t *testing.T) {
 	}
 }
 
+func TestRunMainProgram_Version_UsesProgramNameInTextOutput(t *testing.T) {
+	origVersion, origCommit, origBuildDate := version, commit, buildDate
+	version, commit, buildDate = "v0.1.0", "abc1234", "2026-02-24"
+	defer func() {
+		version, commit, buildDate = origVersion, origCommit, origBuildDate
+	}()
+
+	tests := []struct {
+		name string
+		prog string
+		args []string
+		want string
+	}{
+		{name: "daemon_short_flag", prog: "contactd", args: []string{"-V"}, want: "contactd v0.1.0"},
+		{name: "admin_short_flag", prog: "contactctl", args: []string{"-V"}, want: "contactctl v0.1.0"},
+		{name: "daemon_version_subcommand", prog: "contactd", args: []string{"version"}, want: "contactd v0.1.0"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runMainProgramWithInput(tt.prog, tt.args, map[string]string{}, strings.NewReader(""), &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("runMainProgramWithInput(%q,%v) code = %d, want 0 stderr=%q", tt.prog, tt.args, code, stderr.String())
+			}
+			if got := stdout.String(); !strings.Contains(got, tt.want) {
+				t.Fatalf("stdout = %q, want substring %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunMainProgram_DaemonUnknownCommand_IsDaemonStyle(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := runMainProgramWithInput("contactd", []string{"server"}, map[string]string{}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	errOut := stderr.String()
+	if !strings.Contains(errOut, "contactd: unknown command: server") {
+		t.Fatalf("stderr = %q, want daemon-style unknown command", errOut)
+	}
+	if strings.Contains(errOut, "compat alias") {
+		t.Fatalf("stderr = %q, want no compat alias hint", errOut)
+	}
+}
+
+func TestRunMainProgram_AdminUnknownCommand_HasProgramPrefix(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := runMainProgramWithInput("contactctl", []string{"wat"}, map[string]string{}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "contactctl: unknown command: wat") {
+		t.Fatalf("stderr = %q, want contactctl-prefixed unknown command", got)
+	}
+}
+
+func TestRunMainProgram_AdminUserUnknownSubcommand_HasProgramPrefix(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := runMainProgramWithInput("contactctl", []string{"user", "wat"}, map[string]string{}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "contactctl: unknown user subcommand: wat") {
+		t.Fatalf("stderr = %q, want contactctl-prefixed user subcommand error", got)
+	}
+}
+
+func TestRunMainProgram_DaemonFlagErrors_AreFlattenedForUsers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		args    []string
+		want    string
+		notWant []string
+	}{
+		{
+			name:    "unknown_flag",
+			args:    []string{"--bogus"},
+			want:    "flag provided but not defined",
+			notWant: []string{"load config:", "parse serve flags:"},
+		},
+		{
+			name:    "missing_arg",
+			args:    []string{"-d"},
+			want:    "flag needs an argument: -d",
+			notWant: []string{"load config:", "parse serve flags:"},
+		},
+		{
+			name:    "invalid_port_range",
+			args:    []string{"-p", "0"},
+			want:    "--port must be",
+			notWant: []string{"load config:", "parse serve flags:"},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout, stderr bytes.Buffer
+			code := runMainProgramWithInput("contactd", tt.args, map[string]string{}, strings.NewReader(""), &stdout, &stderr)
+			if code != 2 {
+				t.Fatalf("code = %d, want 2; stderr=%q", code, stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want empty", stdout.String())
+			}
+			got := stderr.String()
+			if !strings.Contains(got, "contactd: ") {
+				t.Fatalf("stderr = %q, want daemon prefix", got)
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("stderr = %q, want substring %q", got, tt.want)
+			}
+			for _, s := range tt.notWant {
+				if strings.Contains(got, s) {
+					t.Fatalf("stderr = %q, should not contain %q", got, s)
+				}
+			}
+		})
+	}
+}
+
+func TestRunMainProgram_VersionHelp_UsesProgramName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		prog string
+		args []string
+		want string
+	}{
+		{prog: "contactd", args: []string{"version", "--help"}, want: "usage: contactd version [--format text|json]"},
+		{prog: "contactctl", args: []string{"version", "--help"}, want: "usage: contactctl version [--format text|json]"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.prog, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout, stderr bytes.Buffer
+			code := runMainProgramWithInput(tt.prog, tt.args, map[string]string{}, strings.NewReader(""), &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("code = %d, want 0 stderr=%q", code, stderr.String())
+			}
+			if got := stdout.String(); !strings.Contains(got, tt.want) {
+				t.Fatalf("stdout = %q, want %q", got, tt.want)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
 func TestServeHTTPGracefully_ListenFailureLogsEvent(t *testing.T) {
 	t.Parallel()
 

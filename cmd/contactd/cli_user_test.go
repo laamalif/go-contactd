@@ -87,8 +87,26 @@ func TestCLI_UserAdd_InvalidUsernameRejected(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("user add invalid username code = %d, want 2", code)
 	}
-	if !strings.Contains(strings.ToLower(stderr), "username") {
-		t.Fatalf("stderr = %q, want username validation error", stderr)
+	if !strings.Contains(stderr, "invalid --username") {
+		t.Fatalf("stderr = %q, want friendly invalid username error", stderr)
+	}
+	if strings.Contains(stderr, "^") || strings.Contains(stderr, "$") {
+		t.Fatalf("stderr = %q, should not expose raw regex", stderr)
+	}
+}
+
+func TestCLI_UserAdd_MissingUsernameShowsRequiredFlagMessage(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "contactd.sqlite")
+	env := map[string]string{"CONTACTD_DB_PATH": dbPath}
+
+	code, _, stderr := runCLI(t, []string{"user", "add", "--password", "pw"}, env)
+	if code != 2 {
+		t.Fatalf("user add missing username code = %d, want 2", code)
+	}
+	if got := strings.TrimSpace(stderr); got != "usage error: missing required --username" {
+		t.Fatalf("stderr = %q, want exact missing-username message", stderr)
 	}
 }
 

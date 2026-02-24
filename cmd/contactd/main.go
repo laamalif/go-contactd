@@ -78,7 +78,7 @@ func runDaemonCLI(prog string, args []string, env map[string]string, stdin io.Re
 		return runServeNamed(prog, nil, env, stderr)
 	}
 	if args[0] == "--version" || args[0] == "-V" {
-		return runVersion(nil, stdout, stderr)
+		return runVersionNamed(prog, nil, stdout, stderr)
 	}
 	if isHelpToken(args[0]) || args[0] == "help" {
 		printDaemonHelp(stdout, prog)
@@ -100,14 +100,11 @@ func runDaemonCLI(prog string, args []string, env map[string]string, stdin io.Re
 		}
 		return runServeNamed(prog, args[1:], env, stderr)
 	case "version": // backward compatibility alias (undocumented)
-		return runVersion(args[1:], stdout, stderr)
+		return runVersionNamed(prog, args[1:], stdout, stderr)
 	case "user": // backward compatibility alias (undocumented); prefer contactctl
-		return runUser(args[1:], env, stdin, stdout, stderr)
+		return runUser(prog, args[1:], env, stdin, stdout, stderr)
 	default:
-		_, _ = fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
-		if args[0] == "server" {
-			_, _ = fmt.Fprintf(stderr, "did you mean: serve (compat alias) or just run %s [flags]?\n", prog)
-		}
+		_, _ = fmt.Fprintf(stderr, "%s: unknown command: %s\n", prog, args[0])
 		printDaemonUsage(stderr, prog)
 		return 2
 	}
@@ -119,7 +116,7 @@ func runAdminCLI(prog string, args []string, env map[string]string, stdin io.Rea
 		return 2
 	}
 	if args[0] == "--version" || args[0] == "-V" {
-		return runVersion(nil, stdout, stderr)
+		return runVersionNamed(prog, nil, stdout, stderr)
 	}
 	if isHelpToken(args[0]) || args[0] == "help" {
 		printAdminHelp(stdout, prog)
@@ -127,19 +124,19 @@ func runAdminCLI(prog string, args []string, env map[string]string, stdin io.Rea
 	}
 	switch args[0] {
 	case "user":
-		return runUser(args[1:], env, stdin, stdout, stderr)
+		return runUser(prog, args[1:], env, stdin, stdout, stderr)
 	case "version":
-		return runVersion(args[1:], stdout, stderr)
+		return runVersionNamed(prog, args[1:], stdout, stderr)
 	default:
-		_, _ = fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
+		_, _ = fmt.Fprintf(stderr, "%s: unknown command: %s\n", prog, args[0])
 		printAdminUsage(stderr, prog)
 		return 2
 	}
 }
 
-func runVersion(args []string, stdout, stderr io.Writer) int {
+func runVersionNamed(prog string, args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && (isHelpToken(args[0]) || args[0] == "help") {
-		printVersionHelp(stdout)
+		printVersionHelp(stdout, prog)
 		return 0
 	}
 	fs := newCLIFlagSet("version")
@@ -175,7 +172,11 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	_, _ = fmt.Fprintf(stdout, "go-contactd %s (commit %s, built %s, %s, %s/%s)\n", version, commit, buildDate, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	name := strings.TrimSpace(prog)
+	if name == "" {
+		name = "contactd"
+	}
+	_, _ = fmt.Fprintf(stdout, "%s %s (commit %s, built %s, %s, %s/%s)\n", name, version, commit, buildDate, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	return 0
 }
 
@@ -187,7 +188,7 @@ func runServeNamed(prog string, args []string, env map[string]string, stderr io.
 	var startupLogBuf bytes.Buffer
 	rt, err := prepareServeRuntime(context.Background(), args, env, &startupLogBuf)
 	if err != nil {
-		err = humanizeDBOpenError(extractDBPathForFatal(args, env), err)
+		err = humanizeServeFatalError(extractDBPathForFatal(args, env), err)
 		if stderr != nil {
 			_, _ = fmt.Fprintf(stderr, "%s: %v\n", prog, err)
 		}
@@ -218,6 +219,20 @@ func runServeNamed(prog string, args []string, env map[string]string, stderr io.
 	stopPrune := startConfiguredPruneLoop(sigCtx, rt.store, rt.cfg, rt.logger)
 	defer stopPrune()
 	return serveHTTPGracefully(sigCtx, srv, rt.logger)
+}
+
+func humanizeServeFatalError(dbPath string, err error) error {
+	err = humanizeDBOpenError(dbPath, err)
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	msg = strings.TrimPrefix(msg, "load config: ")
+	msg = strings.TrimPrefix(msg, "parse serve flags: ")
+	if msg != err.Error() {
+		return errors.New(msg)
+	}
+	return err
 }
 
 func extractDBPathForFatal(args []string, env map[string]string) string {
@@ -308,7 +323,7 @@ func serveHTTPGracefully(runCtx context.Context, srv serveHTTPServer, logger *sl
 	return 0
 }
 
-func runUser(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
+func runUser(prog string, args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		printUserUsage(stderr)
 		return 2
@@ -328,7 +343,10 @@ func runUser(args []string, env map[string]string, stdin io.Reader, stdout, stde
 	case "passwd":
 		return runUserPasswd(args[1:], env, stdin, stdout, stderr)
 	default:
-		_, _ = fmt.Fprintf(stderr, "unknown user subcommand: %s\n", args[0])
+		if strings.TrimSpace(prog) == "" {
+			prog = "contactctl"
+		}
+		_, _ = fmt.Fprintf(stderr, "%s: unknown user subcommand: %s\n", prog, args[0])
 		printUserUsage(stderr)
 		return 2
 	}
@@ -414,8 +432,12 @@ func printUserHelp(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  --db is a short alias for --db-path on all user subcommands")
 }
 
-func printVersionHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: version [--format text|json]")
+func printVersionHelp(w io.Writer, prog string) {
+	name := strings.TrimSpace(prog)
+	if name == "" {
+		name = "contactd"
+	}
+	_, _ = fmt.Fprintf(w, "usage: %s version [--format text|json]\n", name)
 }
 
 func printServeHelp(w io.Writer) {
@@ -468,6 +490,10 @@ func runUserAdd(args []string, env map[string]string, stdin io.Reader, stdout, s
 	}
 	if fs.NArg() != 0 {
 		_, _ = fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
+		return 2
+	}
+	if strings.TrimSpace(username) == "" {
+		_, _ = fmt.Fprintln(stderr, "usage error: missing required --username")
 		return 2
 	}
 	if err := validateUsername(username); err != nil {
@@ -749,11 +775,11 @@ var usernameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$`)
 
 func validateUsername(username string) error {
 	if !usernameRE.MatchString(username) {
-		return fmt.Errorf("username must match %s", usernameRE.String())
+		return fmt.Errorf("invalid --username: use 1-64 chars [a-z0-9_-], start/end with [a-z0-9]")
 	}
 	switch username {
 	case ".well-known", "healthz", "readyz":
-		return fmt.Errorf("username %q is reserved", username)
+		return fmt.Errorf("invalid --username: %q is reserved", username)
 	}
 	return nil
 }
