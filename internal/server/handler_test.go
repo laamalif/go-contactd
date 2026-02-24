@@ -1123,6 +1123,216 @@ func TestHandler_Proppatch_InvalidXML_Returns400(t *testing.T) {
 	}
 }
 
+func TestHandler_Proppatch_AddressbookMetadata_PersistsAndPropfindExposes(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	proppatchBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:set>
+    <D:prop>
+      <D:displayname>Team Contacts</D:displayname>
+      <C:addressbook-description>Shared directory</C:addressbook-description>
+    </D:prop>
+  </D:set>
+</D:propertyupdate>`
+	proppatchReq := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(proppatchBody))
+	proppatchReq.SetBasicAuth("alice", "secret")
+	proppatchReq.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	proppatchRes := httptest.NewRecorder()
+	h.ServeHTTP(proppatchRes, proppatchReq)
+
+	if got, want := proppatchRes.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPPATCH metadata set status = %d, want %d", got, want)
+	}
+	if body := proppatchRes.Body.String(); !strings.Contains(body, "200 OK") {
+		t.Fatalf("PROPPATCH metadata set body missing 200 propstat: %q", body)
+	}
+
+	propfindBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:prop>
+    <D:displayname/>
+    <C:addressbook-description/>
+  </D:prop>
+</D:propfind>`
+	propfindReq := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(propfindBody))
+	propfindReq.SetBasicAuth("alice", "secret")
+	propfindReq.Header.Set("Depth", "0")
+	propfindReq.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	propfindRes := httptest.NewRecorder()
+	h.ServeHTTP(propfindRes, propfindReq)
+
+	if got, want := propfindRes.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND metadata props status = %d, want %d", got, want)
+	}
+	body := propfindRes.Body.String()
+	if !strings.Contains(body, "displayname") || !strings.Contains(body, "Team Contacts") {
+		t.Fatalf("PROPFIND metadata body missing displayname value: %q", body)
+	}
+	if !strings.Contains(body, "addressbook-description") || !strings.Contains(body, "Shared directory") {
+		t.Fatalf("PROPFIND metadata body missing addressbook-description value: %q", body)
+	}
+	if !strings.Contains(body, "200 OK") {
+		t.Fatalf("PROPFIND metadata body missing 200 propstat: %q", body)
+	}
+}
+
+func TestHandler_Proppatch_AddressbookMetadata_RemoveClearsPropfindProps(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	setBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:set>
+    <D:prop>
+      <D:displayname>Team Contacts</D:displayname>
+      <C:addressbook-description>Shared directory</C:addressbook-description>
+    </D:prop>
+  </D:set>
+</D:propertyupdate>`
+	setReq := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(setBody))
+	setReq.SetBasicAuth("alice", "secret")
+	setReq.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	setRes := httptest.NewRecorder()
+	h.ServeHTTP(setRes, setReq)
+	if got, want := setRes.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPPATCH metadata seed status = %d, want %d", got, want)
+	}
+
+	removeBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:remove>
+    <D:prop>
+      <D:displayname/>
+      <C:addressbook-description/>
+    </D:prop>
+  </D:remove>
+</D:propertyupdate>`
+	removeReq := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(removeBody))
+	removeReq.SetBasicAuth("alice", "secret")
+	removeReq.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	removeRes := httptest.NewRecorder()
+	h.ServeHTTP(removeRes, removeReq)
+
+	if got, want := removeRes.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPPATCH metadata remove status = %d, want %d", got, want)
+	}
+	if body := removeRes.Body.String(); !strings.Contains(body, "200 OK") {
+		t.Fatalf("PROPPATCH metadata remove body missing 200 propstat: %q", body)
+	}
+
+	propfindBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:prop>
+    <D:displayname/>
+    <C:addressbook-description/>
+  </D:prop>
+</D:propfind>`
+	propfindReq := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(propfindBody))
+	propfindReq.SetBasicAuth("alice", "secret")
+	propfindReq.Header.Set("Depth", "0")
+	propfindReq.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	propfindRes := httptest.NewRecorder()
+	h.ServeHTTP(propfindRes, propfindReq)
+
+	if got, want := propfindRes.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND metadata props after remove status = %d, want %d", got, want)
+	}
+	body := propfindRes.Body.String()
+	if !strings.Contains(body, "displayname") || !strings.Contains(body, "addressbook-description") {
+		t.Fatalf("PROPFIND metadata props after remove missing prop names: %q", body)
+	}
+	if !strings.Contains(body, "404 Not Found") {
+		t.Fatalf("PROPFIND metadata props after remove missing 404 propstat: %q", body)
+	}
+	if strings.Contains(body, "Team Contacts") || strings.Contains(body, "Shared directory") {
+		t.Fatalf("PROPFIND metadata props after remove still contains prior values: %q", body)
+	}
+}
+
+func TestHandler_Propfind_AddressbookMetadataProps_BodyMatchesGolden(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	patchReq := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:set>
+    <D:prop>
+      <D:displayname>Team Contacts</D:displayname>
+      <C:addressbook-description>Shared directory</C:addressbook-description>
+    </D:prop>
+  </D:set>
+</D:propertyupdate>`))
+	patchReq.SetBasicAuth("alice", "secret")
+	patchReq.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	patchRes := httptest.NewRecorder()
+	h.ServeHTTP(patchRes, patchReq)
+	if got, want := patchRes.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPPATCH metadata golden setup status = %d, want %d", got, want)
+	}
+
+	req := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:prop>
+    <D:displayname/>
+    <C:addressbook-description/>
+  </D:prop>
+</D:propfind>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND metadata golden status = %d, want %d", got, want)
+	}
+	assertGoldenSyncXML(t, rr.Body.String(), "propfind_addressbook_metadata_props_explicit.xml")
+}
+
 func TestHandler_Report_OversizeBodyReturns413(t *testing.T) {
 	t.Parallel()
 

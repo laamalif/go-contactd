@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<multistatus xmlns="DAV:">
+  <response>
+    <href>/alice/contacts/</href>
+    <propstat>
+      <prop>
+        <displayname xmlns="DAV:">Team Contacts</displayname>
+        <addressbook-description xmlns="urn:ietf:params:xml:ns:carddav">Shared directory</addressbook-description>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+</multistatus>

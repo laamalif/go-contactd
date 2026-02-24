@@ -50,6 +50,10 @@ type handler struct {
 	opts HandlerOptions
 }
 
+type addressbookMetadataUpdater interface {
+	UpdateAddressBookMetadata(ctx context.Context, p string, displayname, description *string) error
+}
+
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/.well-known/carddav":
@@ -267,7 +271,13 @@ func parsePropfindRequest(body io.Reader) (propfindRequest, error) {
 }
 
 type proppatchRequest struct {
-	Props []xml.Name
+	Ops []proppatchOp
+}
+
+type proppatchOp struct {
+	Name   xml.Name
+	Remove bool
+	Value  string
 }
 
 func parseProppatchRequest(body io.Reader) (proppatchRequest, error) {
@@ -288,6 +298,7 @@ func parseProppatchRequest(body io.Reader) (proppatchRequest, error) {
 		rootSeen bool
 		depth    int
 		inProp   bool
+		mode     string
 	)
 	for {
 		tok, err := dec.Token()
@@ -308,20 +319,38 @@ func parseProppatchRequest(body io.Reader) (proppatchRequest, error) {
 				continue
 			}
 			switch {
+			case depth == 1 && t.Name.Space == davxml.NamespaceDAV && (t.Name.Local == "set" || t.Name.Local == "remove"):
+				mode = t.Name.Local
+				depth++
+			case depth == 1 && t.Name.Space == davxml.NamespaceDAV:
+				depth++
 			case depth == 2 && t.Name.Space == davxml.NamespaceDAV && t.Name.Local == "prop":
 				inProp = true
 				depth++
 			case inProp && depth == 3:
-				req.Props = append(req.Props, t.Name)
-				if err := dec.Skip(); err != nil {
-					return proppatchRequest{}, err
+				op := proppatchOp{
+					Name:   t.Name,
+					Remove: mode == "remove",
 				}
+				if mode == "set" {
+					if err := dec.DecodeElement(&op.Value, &t); err != nil {
+						return proppatchRequest{}, err
+					}
+				} else {
+					if err := dec.Skip(); err != nil {
+						return proppatchRequest{}, err
+					}
+				}
+				req.Ops = append(req.Ops, op)
 			default:
 				depth++
 			}
 		case xml.EndElement:
 			if inProp && t.Name.Space == davxml.NamespaceDAV && t.Name.Local == "prop" {
 				inProp = false
+			}
+			if depth == 2 && t.Name.Space == davxml.NamespaceDAV && (t.Name.Local == "set" || t.Name.Local == "remove") {
+				mode = ""
 			}
 			if depth > 0 {
 				depth--
@@ -331,7 +360,7 @@ func parseProppatchRequest(body io.Reader) (proppatchRequest, error) {
 	if !rootSeen {
 		return proppatchRequest{}, fmt.Errorf("empty body")
 	}
-	if len(req.Props) == 0 {
+	if len(req.Ops) == 0 {
 		return proppatchRequest{}, fmt.Errorf("no properties")
 	}
 	return req, nil
@@ -389,17 +418,56 @@ func (h *handler) handleProppatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	unsupported := make([]davxml.RawProp, 0, len(req.Props))
-	for _, p := range req.Props {
-		unsupported = append(unsupported, davxml.RawProp{XMLName: p})
+	var (
+		supportedPropNames []davxml.RawProp
+		unsupported        []davxml.RawProp
+		displayname        *string
+		description        *string
+	)
+	for _, op := range req.Ops {
+		switch {
+		case matchXMLName(op.Name, xml.Name{Space: davxml.NamespaceDAV, Local: "displayname"}):
+			supportedPropNames = append(supportedPropNames, davxml.RawProp{XMLName: op.Name})
+			if op.Remove {
+				v := ""
+				displayname = &v
+			} else {
+				v := op.Value
+				displayname = &v
+			}
+		case matchXMLName(op.Name, xml.Name{Space: davxml.NamespaceCardDAV, Local: "addressbook-description"}):
+			supportedPropNames = append(supportedPropNames, davxml.RawProp{XMLName: op.Name})
+			if op.Remove {
+				v := ""
+				description = &v
+			} else {
+				v := op.Value
+				description = &v
+			}
+		default:
+			unsupported = append(unsupported, davxml.RawProp{XMLName: op.Name})
+		}
+	}
+	if (displayname != nil || description != nil) && h.opts.Backend != nil {
+		updater, ok := h.opts.Backend.(addressbookMetadataUpdater)
+		if !ok {
+			unsupported = append(append([]davxml.RawProp(nil), supportedPropNames...), unsupported...)
+			supportedPropNames = nil
+		} else if err := updater.UpdateAddressBookMetadata(r.Context(), r.URL.Path, displayname, description); err != nil {
+			writeBackendError(w, err)
+			return
+		}
 	}
 	ms := davxml.MultiStatus{
 		Responses: []davxml.Response{{
 			Href: r.URL.Path,
-			PropStats: []davxml.PropStat{
-				davxml.PropStatStatus(davxml.Prop{Extra: unsupported}, http.StatusForbidden),
-			},
 		}},
+	}
+	if len(supportedPropNames) > 0 {
+		ms.Responses[0].PropStats = append(ms.Responses[0].PropStats, davxml.PropStatStatus(davxml.Prop{Extra: supportedPropNames}, http.StatusOK))
+	}
+	if len(unsupported) > 0 {
+		ms.Responses[0].PropStats = append(ms.Responses[0].PropStats, davxml.PropStatStatus(davxml.Prop{Extra: unsupported}, http.StatusForbidden))
 	}
 	body, err := davxml.Marshal(ms)
 	if err != nil {
@@ -662,6 +730,18 @@ func (h *handler) addressbookPropfindResponse(ctx context.Context, ab gocarddav.
 				Collection:  davxml.DAVCollection(),
 				Addressbook: davxml.CardDAVAddressbook(),
 			}
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "displayname"}):
+			if ab.Name == "" {
+				unknown = append(unknown, davxml.RawProp{XMLName: p})
+				continue
+			}
+			okProp.DisplayName = ab.Name
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceCardDAV, Local: "addressbook-description"}):
+			if ab.Description == "" {
+				unknown = append(unknown, davxml.RawProp{XMLName: p})
+				continue
+			}
+			okProp.AddressbookDesc = ab.Description
 		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "sync-token"}):
 			if h.opts.Sync == nil {
 				unknown = append(unknown, davxml.RawProp{XMLName: p})
@@ -725,6 +805,8 @@ func hasAnyProp(p davxml.Prop) bool {
 		p.PrincipalURL != nil ||
 		p.AddressbookHomeSet != nil ||
 		p.ResourceType != nil ||
+		p.DisplayName != "" ||
+		p.AddressbookDesc != "" ||
 		p.SyncToken != "" ||
 		p.GetCTag != "" ||
 		p.GetETag != "" ||

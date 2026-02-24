@@ -349,6 +349,42 @@ func (s *Store) GetAddressbookByUsernameSlug(ctx context.Context, username, slug
 	return ab, nil
 }
 
+func (s *Store) UpdateAddressbookMetadataByUsernameSlug(ctx context.Context, username, slug string, displayname, description *string) error {
+	if displayname == nil && description == nil {
+		return nil
+	}
+	now := s.now().UTC()
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE addressbooks
+		SET
+			displayname = CASE WHEN ? THEN ? ELSE displayname END,
+			description = CASE WHEN ? THEN ? ELSE description END,
+			updated_at = CASE WHEN (? OR ?) THEN ? ELSE updated_at END
+		WHERE id IN (
+			SELECT ab.id
+			FROM addressbooks ab
+			JOIN users u ON u.id = ab.user_id
+			WHERE u.username = ? AND ab.slug = ?
+		)
+	`,
+		displayname != nil, stringValue(displayname),
+		description != nil, stringValue(description),
+		displayname != nil, description != nil, now,
+		username, slug,
+	)
+	if err != nil {
+		return fmt.Errorf("update addressbook metadata by username/slug: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update addressbook metadata rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) DeleteAddressbookByUsernameSlug(ctx context.Context, username, slug string) error {
 	res, err := s.db.ExecContext(ctx, `
 		DELETE FROM addressbooks
@@ -370,6 +406,13 @@ func (s *Store) DeleteAddressbookByUsernameSlug(ctx context.Context, username, s
 		return ErrNotFound
 	}
 	return nil
+}
+
+func stringValue(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 func (s *Store) GetCard(ctx context.Context, addressbookID int64, href string) (Card, error) {
