@@ -9,6 +9,7 @@ RESP_FILE="${TMP_DIR}/resp.txt"
 PROJECT_NAME="contactdsmoke"
 HOST_PORT="${CONTACTD_HOST_PORT:-18080}"
 BASE_URL="http://127.0.0.1:${HOST_PORT}"
+CONFLICT_SRC_DIR="${TMP_DIR}/import-conflict"
 
 cleanup() {
   docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" down -v >/dev/null 2>&1 || true
@@ -59,6 +60,13 @@ assert_resp_contains() {
   grep -Fq "${needle}" "${RESP_FILE}" || fail "response missing ${needle}: $(cat "${RESP_FILE}")"
 }
 
+assert_resp_not_contains() {
+  local needle="$1"
+  if grep -Fq "${needle}" "${RESP_FILE}"; then
+    fail "response unexpectedly contained ${needle}: $(cat "${RESP_FILE}")"
+  fi
+}
+
 extract_sync_token() {
   sed -n 's:.*<sync-token[^>]*>\([^<]*\)</sync-token>.*:\1:p' "${RESP_FILE}" | head -n1
 }
@@ -68,6 +76,14 @@ require_cmds() {
   for c in docker curl; do
     command -v "${c}" >/dev/null 2>&1 || fail "missing required command: ${c}"
   done
+}
+
+compose_exec_contactctl() {
+  docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T contactd /contactctl "$@"
+}
+
+compose_container_id() {
+  docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" ps -q contactd
 }
 
 ensure_env_file() {
@@ -102,6 +118,9 @@ docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${C
 
 log "waiting for health"
 wait_for_200 "/health"
+
+log "creating second user for cross-tenant checks"
+compose_exec_contactctl user add --username bob --password secret -d /data/contactd.sqlite >/dev/null
 
 log "principal discovery"
 http_capture PROPFIND "${BASE_URL}/alice/" \
@@ -138,6 +157,34 @@ assert_resp_contains "/alice/contacts/a.vcf"
 token1="$(extract_sync_token)"
 [[ -n "${token1}" ]] || fail "missing initial sync token"
 log "captured token: ${token1}"
+
+log "cross-tenant sync-collection must be 404"
+http_capture PUT "${BASE_URL}/bob/contacts/bob.vcf" \
+  -u bob:secret \
+  -H 'Content-Type: text/vcard; charset=utf-8' \
+  --data-binary $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-bob\r\nFN:Bob User\r\nEND:VCARD\r\n' >/dev/null
+expect_status 201
+http_capture REPORT "${BASE_URL}/bob/contacts/" \
+  -u alice:secret \
+  -H 'Content-Type: application/xml; charset=utf-8' \
+  --data-binary "${SYNC_EMPTY}" >/dev/null
+expect_status 404
+assert_resp_not_contains "/bob/contacts/bob.vcf"
+
+log "contactctl import --dry-run must fail on UID conflict"
+mkdir -p "${CONFLICT_SRC_DIR}"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-a\r\nFN:Conflict A\r\nEND:VCARD\r\n' > "${CONFLICT_SRC_DIR}/conflict.vcf"
+CID="$(compose_container_id)"
+[[ -n "${CID}" ]] || fail "could not resolve contactd container id"
+docker cp "${CONFLICT_SRC_DIR}" "${CID}:/tmp/import-conflict" >/dev/null
+set +e
+dry_out="$(compose_exec_contactctl import --username alice --dry-run -d /data/contactd.sqlite /tmp/import-conflict 2>&1)"
+dry_code=$?
+set -e
+if [[ "${dry_code}" -eq 0 ]]; then
+  fail "dry-run import unexpectedly succeeded on UID conflict: ${dry_out}"
+fi
+printf '%s' "${dry_out}" | grep -Fq "import error:" || fail "dry-run import conflict missing import error: ${dry_out}"
 
 log "restarting container"
 docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" restart contactd

@@ -11,6 +11,7 @@ ADMIN_BIN_PATH="${TMP_DIR}/contactctl"
 DB_PATH="${TMP_DIR}/contactd.sqlite"
 SERVER_LOG="${TMP_DIR}/server.log"
 SERVER_PID=""
+IMPORT_CONFLICT_DIR="${TMP_DIR}/import-conflict"
 
 cleanup() {
   if [[ -n "${SERVER_PID}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
@@ -80,6 +81,12 @@ assert_contains() {
   [[ "${haystack}" == *"${needle}"* ]] || fail "response missing ${needle}: ${haystack}"
 }
 
+assert_not_contains() {
+  local needle="$1"
+  local haystack="$2"
+  [[ "${haystack}" != *"${needle}"* ]] || fail "response unexpectedly contained ${needle}: ${haystack}"
+}
+
 extract_sync_token() {
   sed -n 's:.*<sync-token[^>]*>\([^<]*\)</sync-token>.*:\1:p' | head -n1
 }
@@ -97,6 +104,9 @@ start_server
 
 log "creating user via CLI"
 "${ADMIN_BIN_PATH}" user add -d "${DB_PATH}" --username alice --password secret >/dev/null
+
+log "creating second user for cross-tenant checks"
+"${ADMIN_BIN_PATH}" user add -d "${DB_PATH}" --username bob --password secret >/dev/null
 
 log "checking well-known redirect"
 resp="$(curl -sS -i "${BASE_URL}/.well-known/carddav")"
@@ -138,6 +148,31 @@ assert_contains "/alice/contacts/a.vcf" "${resp}"
 token1="$(printf '%s' "${resp}" | extract_sync_token)"
 [[ -n "${token1}" ]] || fail "initial sync token missing"
 log "captured token: ${token1}"
+
+log "cross-tenant sync-collection must be 404"
+resp="$(curl -sS -i -u bob:secret -X PUT \
+  -H 'Content-Type: text/vcard; charset=utf-8' \
+  --data-binary $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-bob\r\nFN:Bob User\r\nEND:VCARD\r\n' \
+  "${BASE_URL}/bob/contacts/bob.vcf")"
+expect_status 201 "${resp}"
+resp="$(curl -sS -i -u alice:secret -X REPORT \
+  -H 'Content-Type: application/xml; charset=utf-8' \
+  --data-binary "${SYNC_EMPTY}" \
+  "${BASE_URL}/bob/contacts/")"
+expect_status 404 "${resp}"
+assert_not_contains "/bob/contacts/bob.vcf" "${resp}"
+
+log "contactctl import --dry-run must fail on UID conflict"
+mkdir -p "${IMPORT_CONFLICT_DIR}"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-a\r\nFN:Conflict A\r\nEND:VCARD\r\n' > "${IMPORT_CONFLICT_DIR}/conflict.vcf"
+set +e
+dry_out="$("${ADMIN_BIN_PATH}" import --username alice --dry-run -d "${DB_PATH}" "${IMPORT_CONFLICT_DIR}" 2>&1)"
+dry_code=$?
+set -e
+if [[ "${dry_code}" -eq 0 ]]; then
+  fail "dry-run import unexpectedly succeeded on UID conflict: ${dry_out}"
+fi
+assert_contains "import error:" "${dry_out}"
 
 log "restarting server"
 stop_server
