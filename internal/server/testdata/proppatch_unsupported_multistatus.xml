@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<multistatus xmlns="DAV:">
+  <response>
+    <href>/alice/contacts/</href>
+    <propstat>
+      <prop>
+        <sync-token xmlns="DAV:"></sync-token>
+        <foo xmlns="urn:example"></foo>
+        <getctag xmlns="http://calendarserver.org/ns/"></getctag>
+      </prop>
+      <status>HTTP/1.1 403 Forbidden</status>
+    </propstat>
+  </response>
+</multistatus>
