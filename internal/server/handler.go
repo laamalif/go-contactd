@@ -730,6 +730,8 @@ func (h *handler) addressbookPropfindResponse(ctx context.Context, ab gocarddav.
 				Collection:  davxml.DAVCollection(),
 				Addressbook: davxml.CardDAVAddressbook(),
 			}
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "supported-report-set"}):
+			okProp.SupportedReportSet = davxml.AddressbookSupportedReportSet(h.opts.Sync != nil)
 		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "displayname"}):
 			if ab.Name == "" {
 				unknown = append(unknown, davxml.RawProp{XMLName: p})
@@ -805,6 +807,7 @@ func hasAnyProp(p davxml.Prop) bool {
 		p.PrincipalURL != nil ||
 		p.AddressbookHomeSet != nil ||
 		p.ResourceType != nil ||
+		p.SupportedReportSet != nil ||
 		p.DisplayName != "" ||
 		p.AddressbookDesc != "" ||
 		p.SyncToken != "" ||
@@ -831,6 +834,7 @@ func cardDefaultPropNames() []xml.Name {
 func addressbookDefaultPropNames(includeExtensions bool) []xml.Name {
 	out := []xml.Name{
 		{Space: davxml.NamespaceDAV, Local: "resourcetype"},
+		{Space: davxml.NamespaceDAV, Local: "supported-report-set"},
 	}
 	if includeExtensions {
 		out = append(out,

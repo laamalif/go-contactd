@@ -877,6 +877,87 @@ func TestHandler_Propfind_AddressbookExplicitExtensionProps_BodyMatchesGolden(t 
 	assertGoldenSyncXML(t, rr.Body.String(), "propfind_addressbook_extension_props_explicit.xml")
 }
 
+func TestHandler_Propfind_AddressbookSupportedReportSet_Explicit(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:">
+  <D:prop>
+    <D:supported-report-set/>
+  </D:prop>
+</D:propfind>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND addressbook supported-report-set status = %d, want %d", got, want)
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "404 Not Found") {
+		t.Fatalf("PROPFIND addressbook supported-report-set unexpectedly 404: %q", body)
+	}
+	if !strings.Contains(body, "supported-report-set") {
+		t.Fatalf("PROPFIND addressbook supported-report-set missing property: %q", body)
+	}
+	if !strings.Contains(body, "sync-collection") || !strings.Contains(body, "addressbook-multiget") || !strings.Contains(body, "addressbook-query") {
+		t.Fatalf("PROPFIND addressbook supported-report-set missing reports: %q", body)
+	}
+}
+
+func TestHandler_Propfind_AddressbookSupportedReportSet_Explicit_BodyMatchesGolden(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:">
+  <D:prop>
+    <D:supported-report-set/>
+  </D:prop>
+</D:propfind>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND addressbook supported-report-set golden status = %d, want %d", got, want)
+	}
+	assertGoldenSyncXML(t, rr.Body.String(), "propfind_addressbook_supported_report_set_explicit.xml")
+}
+
 func TestHandler_Propfind_AddressbookAllPropExtensionProps_BodyMatchesGolden(t *testing.T) {
 	t.Parallel()
 
@@ -1092,6 +1173,79 @@ func TestHandler_Proppatch_AddressbookUnsupportedProps_BodyMatchesGolden(t *test
 		t.Fatalf("PROPPATCH unsupported golden status = %d, want %d", got, want)
 	}
 	assertGoldenSyncXML(t, rr.Body.String(), "proppatch_unsupported_multistatus.xml")
+}
+
+func TestHandler_Proppatch_AddressbookMetadata_MixedSupportedAndUnsupportedPropstats(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav" xmlns:X="urn:example">
+  <D:set>
+    <D:prop>
+      <D:displayname>Team Contacts</D:displayname>
+      <X:foo>bar</X:foo>
+    </D:prop>
+  </D:set>
+  <D:remove>
+    <D:prop>
+      <C:addressbook-description/>
+    </D:prop>
+  </D:remove>
+</D:propertyupdate>`
+	req := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPPATCH mixed status = %d, want %d", got, want)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "200 OK") || !strings.Contains(body, "403 Forbidden") {
+		t.Fatalf("PROPPATCH mixed body missing 200/403 propstats: %q", body)
+	}
+	if !strings.Contains(body, "displayname") || !strings.Contains(body, "addressbook-description") || !strings.Contains(body, "foo") {
+		t.Fatalf("PROPPATCH mixed body missing expected props: %q", body)
+	}
+
+	propfindReq := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:prop>
+    <D:displayname/>
+    <C:addressbook-description/>
+  </D:prop>
+</D:propfind>`))
+	propfindReq.SetBasicAuth("alice", "secret")
+	propfindReq.Header.Set("Depth", "0")
+	propfindReq.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	propfindRes := httptest.NewRecorder()
+	h.ServeHTTP(propfindRes, propfindReq)
+	if got, want := propfindRes.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND after mixed PROPPATCH status = %d, want %d", got, want)
+	}
+	propfindBody := propfindRes.Body.String()
+	if !strings.Contains(propfindBody, "Team Contacts") {
+		t.Fatalf("PROPFIND after mixed PROPPATCH missing persisted displayname: %q", propfindBody)
+	}
+	if !strings.Contains(propfindBody, "addressbook-description") || !strings.Contains(propfindBody, "404 Not Found") {
+		t.Fatalf("PROPFIND after mixed PROPPATCH missing cleared description 404 propstat: %q", propfindBody)
+	}
 }
 
 func TestHandler_Proppatch_InvalidXML_Returns400(t *testing.T) {

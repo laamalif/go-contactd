@@ -4,10 +4,6 @@
     <href>/alice/contacts/</href>
     <propstat>
       <prop>
-        <resourcetype xmlns="DAV:">
-          <collection xmlns="DAV:"></collection>
-          <addressbook xmlns="urn:ietf:params:xml:ns:carddav"></addressbook>
-        </resourcetype>
         <supported-report-set xmlns="DAV:">
           <supported-report xmlns="DAV:">
             <report xmlns="DAV:">
@@ -25,8 +21,6 @@
             </report>
           </supported-report>
         </supported-report-set>
-        <sync-token xmlns="DAV:">{{SYNC_TOKEN}}</sync-token>
-        <getctag xmlns="http://calendarserver.org/ns/">0</getctag>
       </prop>
       <status>HTTP/1.1 200 OK</status>
     </propstat>

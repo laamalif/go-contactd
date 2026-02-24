@@ -39,18 +39,33 @@ type ResourceType struct {
 	Addressbook *struct{} `xml:"urn:ietf:params:xml:ns:carddav addressbook,omitempty"`
 }
 
+type SupportedReportSet struct {
+	Reports []SupportedReport `xml:"DAV: supported-report,omitempty"`
+}
+
+type SupportedReport struct {
+	Report Report `xml:"DAV: report"`
+}
+
+type Report struct {
+	SyncCollection   *struct{} `xml:"DAV: sync-collection,omitempty"`
+	AddressbookMulti *struct{} `xml:"urn:ietf:params:xml:ns:carddav addressbook-multiget,omitempty"`
+	AddressbookQuery *struct{} `xml:"urn:ietf:params:xml:ns:carddav addressbook-query,omitempty"`
+}
+
 type Prop struct {
-	CurrentUserPrincipal *Href         `xml:"DAV: current-user-principal,omitempty"`
-	PrincipalURL         *Href         `xml:"DAV: principal-URL,omitempty"`
-	AddressbookHomeSet   *Href         `xml:"urn:ietf:params:xml:ns:carddav addressbook-home-set,omitempty"`
-	ResourceType         *ResourceType `xml:"DAV: resourcetype,omitempty"`
-	DisplayName          string        `xml:"DAV: displayname,omitempty"`
-	AddressbookDesc      string        `xml:"urn:ietf:params:xml:ns:carddav addressbook-description,omitempty"`
-	SyncToken            string        `xml:"DAV: sync-token,omitempty"`
-	GetCTag              string        `xml:"http://calendarserver.org/ns/ getctag,omitempty"`
-	GetETag              string        `xml:"DAV: getetag,omitempty"`
-	AddressData          string        `xml:"urn:ietf:params:xml:ns:carddav address-data,omitempty"`
-	Extra                []RawProp     `xml:",any,omitempty"`
+	CurrentUserPrincipal *Href               `xml:"DAV: current-user-principal,omitempty"`
+	PrincipalURL         *Href               `xml:"DAV: principal-URL,omitempty"`
+	AddressbookHomeSet   *Href               `xml:"urn:ietf:params:xml:ns:carddav addressbook-home-set,omitempty"`
+	ResourceType         *ResourceType       `xml:"DAV: resourcetype,omitempty"`
+	SupportedReportSet   *SupportedReportSet `xml:"DAV: supported-report-set,omitempty"`
+	DisplayName          string              `xml:"DAV: displayname,omitempty"`
+	AddressbookDesc      string              `xml:"urn:ietf:params:xml:ns:carddav addressbook-description,omitempty"`
+	SyncToken            string              `xml:"DAV: sync-token,omitempty"`
+	GetCTag              string              `xml:"http://calendarserver.org/ns/ getctag,omitempty"`
+	GetETag              string              `xml:"DAV: getetag,omitempty"`
+	AddressData          string              `xml:"urn:ietf:params:xml:ns:carddav address-data,omitempty"`
+	Extra                []RawProp           `xml:",any,omitempty"`
 }
 
 type RawProp struct {
@@ -93,6 +108,19 @@ func CardDAVPrecondition(name string) Error {
 	return Error{
 		Extra: []RawProp{{XMLName: xml.Name{Space: NamespaceCardDAV, Local: name}}},
 	}
+}
+
+func AddressbookSupportedReportSet(includeSync bool) *SupportedReportSet {
+	out := &SupportedReportSet{
+		Reports: []SupportedReport{
+			{Report: Report{AddressbookMulti: &struct{}{}}},
+			{Report: Report{AddressbookQuery: &struct{}{}}},
+		},
+	}
+	if includeSync {
+		out.Reports = append([]SupportedReport{{Report: Report{SyncCollection: &struct{}{}}}}, out.Reports...)
+	}
+	return out
 }
 
 func itoa(n int) string {
