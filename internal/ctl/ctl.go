@@ -554,6 +554,9 @@ func runExport(args []string, env map[string]string, stdout, stderr io.Writer) i
 }
 
 func writeConcatExportFile(outPath string, cards []db.Card) error {
+	if err := rejectSymlinkOrSpecialOutputPath(outPath); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("open concat export file: %w", err)
@@ -577,9 +580,30 @@ func writeDirExport(outDir string, cards []db.Card) error {
 			return err
 		}
 		path := filepath.Join(outDir, name)
+		if err := rejectSymlinkOrSpecialOutputPath(path); err != nil {
+			return err
+		}
 		if err := os.WriteFile(path, c.VCard, 0o600); err != nil {
 			return fmt.Errorf("write export file %s: %w", name, err)
 		}
+	}
+	return nil
+}
+
+func rejectSymlinkOrSpecialOutputPath(p string) error {
+	info, err := os.Lstat(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat output path %s: %w", p, err)
+	}
+	mode := info.Mode()
+	if mode&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing symlink output path %s", p)
+	}
+	if !mode.IsRegular() {
+		return fmt.Errorf("refusing non-regular output path %s", p)
 	}
 	return nil
 }
@@ -693,7 +717,11 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 		if err != nil {
 			return 0, 0, err
 		}
-		raw, err := os.ReadFile(filepath.Join(dir, name))
+		filePath := filepath.Join(dir, name)
+		if err := rejectImportSymlinkOrSpecialFile(filePath); err != nil {
+			return 0, 0, fmt.Errorf("import file %s: %w", name, err)
+		}
+		raw, err := os.ReadFile(filePath)
 		if err != nil {
 			return 0, 0, fmt.Errorf("read import file %s: %w", name, err)
 		}
@@ -711,6 +739,21 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 		batch = append(batch, db.PutCardInput{AddressbookID: addressbookID, Href: href, UID: uid, VCard: raw})
 	}
 	return applyImportedBatch(ctx, store, batch, dryRun)
+}
+
+func rejectImportSymlinkOrSpecialFile(p string) error {
+	info, err := os.Lstat(p)
+	if err != nil {
+		return fmt.Errorf("stat import file: %w", err)
+	}
+	mode := info.Mode()
+	if mode&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing symlink import file")
+	}
+	if !mode.IsRegular() {
+		return fmt.Errorf("refusing non-regular import file")
+	}
+	return nil
 }
 
 func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID int64, path string, dryRun bool, vcardMaxBytes int) (int, int, error) {

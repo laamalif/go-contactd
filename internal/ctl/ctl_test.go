@@ -163,6 +163,91 @@ func TestRunCLI_ExportDir_WriteFailureReturns1(t *testing.T) {
 	}
 }
 
+func TestRunCLI_ExportDir_RejectsSymlinkDestinationFile(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedExportTestDB(t)
+	tmp := t.TempDir()
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll outDir: %v", err)
+	}
+	target := filepath.Join(tmp, "outside.txt")
+	if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		t.Fatalf("WriteFile target: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(outDir, "a.vcf")); err != nil {
+		t.Fatalf("Symlink a.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"export",
+		"--username", "alice",
+		"--book", "contacts",
+		"--format", "dir",
+		"--out", outDir,
+		"-d", dbPath,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 1 {
+		t.Fatalf("code=%d want 1 stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "io error:") {
+		t.Fatalf("stderr=%q want io error", got)
+	}
+	gotTarget, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile target: %v", err)
+	}
+	if string(gotTarget) != "keep" {
+		t.Fatalf("target=%q want unchanged", string(gotTarget))
+	}
+}
+
+func TestRunCLI_ExportConcat_RejectsSymlinkOutPath(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedExportTestDB(t)
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "outside.txt")
+	if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		t.Fatalf("WriteFile target: %v", err)
+	}
+	outPath := filepath.Join(tmp, "out.vcf")
+	if err := os.Symlink(target, outPath); err != nil {
+		t.Fatalf("Symlink out.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"export",
+		"--username", "alice",
+		"--book", "contacts",
+		"--format", "concat",
+		"--out", outPath,
+		"-d", dbPath,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 1 {
+		t.Fatalf("code=%d want 1 stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "io error:") {
+		t.Fatalf("stderr=%q want io error", got)
+	}
+	gotTarget, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile target: %v", err)
+	}
+	if string(gotTarget) != "keep" {
+		t.Fatalf("target=%q want unchanged", string(gotTarget))
+	}
+}
+
 func TestRunCLI_ImportDir_ImportsVCFFiles(t *testing.T) {
 	t.Parallel()
 
@@ -214,6 +299,59 @@ func TestRunCLI_ImportDir_ImportsVCFFiles(t *testing.T) {
 	}
 	if cards[0].Href != "a.vcf" || cards[1].Href != "b.vcf" {
 		t.Fatalf("hrefs=%q,%q want a.vcf,b.vcf", cards[0].Href, cards[1].Href)
+	}
+}
+
+func TestRunCLI_ImportDir_RejectsSymlinkSourceFile(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedEmptyImportTestDB(t)
+	tmp := t.TempDir()
+	srcDir := filepath.Join(tmp, "src")
+	if err := os.MkdirAll(srcDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll srcDir: %v", err)
+	}
+	external := filepath.Join(tmp, "external-secret.vcf")
+	raw := []byte("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-ext\r\nFN:External Secret Via Symlink\r\nEND:VCARD\r\n")
+	if err := os.WriteFile(external, raw, 0o600); err != nil {
+		t.Fatalf("WriteFile external: %v", err)
+	}
+	if err := os.Symlink(external, filepath.Join(srcDir, "link.vcf")); err != nil {
+		t.Fatalf("Symlink link.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"import",
+		"--username", "alice",
+		"-d", dbPath,
+		srcDir,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 1 {
+		t.Fatalf("code=%d want 1 stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "import error:") {
+		t.Fatalf("stderr=%q want import error", got)
+	}
+
+	store, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("db.Open verify: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), "alice", "contacts")
+	if err != nil {
+		t.Fatalf("GetAddressbookByUsernameSlug: %v", err)
+	}
+	cards, err := store.ListCards(context.Background(), ab.ID)
+	if err != nil {
+		t.Fatalf("ListCards: %v", err)
+	}
+	if len(cards) != 0 {
+		t.Fatalf("cards len=%d want 0", len(cards))
 	}
 }
 
