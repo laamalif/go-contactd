@@ -407,6 +407,39 @@ func TestHandler_CardPut_UsesBackendCreateStatusWhenAvailable(t *testing.T) {
 	}
 }
 
+type putStatusCreatedFakeBackend struct{ putStatusFakeBackend }
+
+func (putStatusCreatedFakeBackend) PutAddressObjectWithStatus(_ context.Context, p string, card vcard.Card, _ *gocarddav.PutAddressObjectOptions) (*gocarddav.AddressObject, bool, error) {
+	return &gocarddav.AddressObject{Path: p, ETag: `"etag-created"`, Card: card}, true, nil
+}
+
+func TestHandler_CardPut_UsesBackendCreateStatusCreatedPathWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: putStatusCreatedFakeBackend{},
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return "alice", username == "alice" && password == "secret", nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	body := "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:u2\r\nFN:Alice Created\r\nEND:VCARD\r\n"
+	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/b.vcf", strings.NewReader(body))
+	req.Header.Set("Content-Type", "text/vcard")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusCreated; got != want {
+		t.Fatalf("status = %d, want %d; body=%q", got, want, rr.Body.String())
+	}
+	if got := rr.Header().Get("ETag"); got != `"etag-created"` {
+		t.Fatalf("ETag = %q, want quoted created etag", got)
+	}
+}
+
 func TestDavx_Options_AdvertisesDAV_1_3_Addressbook(t *testing.T) {
 	t.Parallel()
 
