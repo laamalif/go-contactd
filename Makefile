@@ -6,7 +6,7 @@ BIN_DIR ?= bin
 DIST_DIR ?= dist
 PKG ?= ./cmd/contactd
 
-.PHONY: build build-static clean dist fmt lint release test vet verify
+.PHONY: build build-static build-static-ext clean dist fmt lint release test vet verify
 
 build:
 	mkdir -p "$(BIN_DIR)"
@@ -14,7 +14,11 @@ build:
 
 build-static:
 	mkdir -p "$(BIN_DIR)"
-	./build_dist.sh --strip -o "$(BIN_DIR)/$(BIN_NAME)" "$(PKG)"
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w" -o "$(BIN_DIR)/$(BIN_NAME)" "$(PKG)"
+
+build-static-ext:
+	mkdir -p "$(BIN_DIR)"
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w -extldflags '-static'" -o "$(BIN_DIR)/$(BIN_NAME)" "$(PKG)"
 
 dist:
 	./build_release.sh
