@@ -329,6 +329,49 @@ func TestStore_LastCardChange_EmptyAddressbookReturnsErrNotFound(t *testing.T) {
 	}
 }
 
+func TestStore_PutCardsAtomic_RollsBackOnLaterError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	userID, err := store.CreateUser(ctx, "alice", "bcrypt-hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	bookID, err := store.CreateAddressbook(ctx, userID, "contacts", "Contacts")
+	if err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+
+	_, err = store.PutCardsAtomic(ctx, []db.PutCardInput{
+		{
+			AddressbookID: bookID,
+			Href:          "a.vcf",
+			UID:           "uid-a",
+			VCard:         []byte("BEGIN:VCARD\nVERSION:3.0\nUID:uid-a\nFN:A\nEND:VCARD\n"),
+		},
+		{
+			AddressbookID: bookID,
+			Href:          "b.vcf",
+			UID:           "", // invalid later item should roll back the first insert
+			VCard:         []byte("BEGIN:VCARD\nVERSION:3.0\nFN:B\nEND:VCARD\n"),
+		},
+	})
+	if err == nil {
+		t.Fatal("PutCardsAtomic error = nil, want error")
+	}
+
+	count, err := store.CardCount(ctx, bookID)
+	if err != nil {
+		t.Fatalf("CardCount: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("CardCount after failed PutCardsAtomic = %d, want 0", count)
+	}
+}
+
 func TestStore_PruneCardChangesByAge(t *testing.T) {
 	t.Parallel()
 

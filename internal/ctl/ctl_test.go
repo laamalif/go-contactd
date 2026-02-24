@@ -502,6 +502,56 @@ func TestRunCLI_ImportDir_MultiCardSingleFileReturnsError(t *testing.T) {
 	}
 }
 
+func TestRunCLI_ImportDir_ErrorIsAtomic_NoPartialCommit(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedEmptyImportTestDB(t)
+	srcDir := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(srcDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "a.vcf"), []byte("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-a\r\nFN:Alice\r\nEND:VCARD\r\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile a.vcf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "b.vcf"), []byte("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Missing UID\r\nEND:VCARD\r\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile b.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"import",
+		"--username", "alice",
+		"-d", dbPath,
+		srcDir,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 1 {
+		t.Fatalf("code=%d want 1 stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "import error:") || !strings.Contains(got, "missing UID") {
+		t.Fatalf("stderr=%q want missing UID error", got)
+	}
+
+	store, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("db.Open verify: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), "alice", "contacts")
+	if err != nil {
+		t.Fatalf("GetAddressbookByUsernameSlug: %v", err)
+	}
+	cards, err := store.ListCards(context.Background(), ab.ID)
+	if err != nil {
+		t.Fatalf("ListCards: %v", err)
+	}
+	if len(cards) != 0 {
+		t.Fatalf("cards len=%d want 0 after failed import", len(cards))
+	}
+}
+
 func TestRunCLI_ImportDir_UIDConflictReturnsError(t *testing.T) {
 	t.Parallel()
 

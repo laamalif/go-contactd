@@ -687,7 +687,7 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 	}
 	sort.Strings(names)
 
-	var created, updated int
+	batch := make([]db.PutCardInput, 0, len(names))
 	for _, name := range names {
 		href, err := safeExportCardFilename(name)
 		if err != nil {
@@ -708,17 +708,9 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 		if uid == "" {
 			return 0, 0, fmt.Errorf("import file %s: missing UID", name)
 		}
-		res, err := putOrClassifyImportedCard(ctx, store, addressbookID, href, uid, raw, dryRun)
-		if err != nil {
-			return 0, 0, fmt.Errorf("put card %s: %w", name, err)
-		}
-		if res.Created {
-			created++
-		} else {
-			updated++
-		}
+		batch = append(batch, db.PutCardInput{AddressbookID: addressbookID, Href: href, UID: uid, VCard: raw})
 	}
-	return created, updated, nil
+	return applyImportedBatch(ctx, store, batch, dryRun)
 }
 
 func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID int64, path string, dryRun bool, vcardMaxBytes int) (int, int, error) {
@@ -728,7 +720,7 @@ func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID in
 	}
 	defer func() { _ = f.Close() }()
 	dec := vcard.NewDecoder(f)
-	var created, updated int
+	var batch []db.PutCardInput
 	for {
 		card, err := dec.Decode()
 		if err == io.EOF {
@@ -755,20 +747,9 @@ func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID in
 		if err := validateImportedVCardSize(raw, vcardMaxBytes); err != nil {
 			return 0, 0, fmt.Errorf("put card %s: %w", uid, err)
 		}
-		if dryRun {
-			raw = nil
-		}
-		res, err := putOrClassifyImportedCard(ctx, store, addressbookID, href, uid, raw, dryRun)
-		if err != nil {
-			return 0, 0, fmt.Errorf("put card %s: %w", uid, err)
-		}
-		if res.Created {
-			created++
-		} else {
-			updated++
-		}
+		batch = append(batch, db.PutCardInput{AddressbookID: addressbookID, Href: href, UID: uid, VCard: raw})
 	}
-	return created, updated, nil
+	return applyImportedBatch(ctx, store, batch, dryRun)
 }
 
 func validateImportedVCardSize(raw []byte, maxBytes int) error {
@@ -820,6 +801,36 @@ func putOrClassifyImportedCard(ctx context.Context, store *db.Store, addressbook
 		UID:           uid,
 		VCard:         raw,
 	})
+}
+
+func applyImportedBatch(ctx context.Context, store *db.Store, batch []db.PutCardInput, dryRun bool) (int, int, error) {
+	var created, updated int
+	if dryRun {
+		for _, in := range batch {
+			res, err := putOrClassifyImportedCard(ctx, store, in.AddressbookID, in.Href, in.UID, nil, true)
+			if err != nil {
+				return 0, 0, fmt.Errorf("put card %s: %w", in.Href, err)
+			}
+			if res.Created {
+				created++
+			} else {
+				updated++
+			}
+		}
+		return created, updated, nil
+	}
+	results, err := store.PutCardsAtomic(ctx, batch)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, res := range results {
+		if res.Created {
+			created++
+		} else {
+			updated++
+		}
+	}
+	return created, updated, nil
 }
 
 func decodeSingleCardBytes(raw []byte) (vcard.Card, error) {

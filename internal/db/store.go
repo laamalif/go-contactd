@@ -618,7 +618,50 @@ func (s *Store) PutCardConditional(ctx context.Context, in PutCardInput, cond Pu
 	return s.putCard(ctx, in, &cond)
 }
 
+func (s *Store) PutCardsAtomic(ctx context.Context, inputs []PutCardInput) ([]PutCardResult, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+	out := make([]PutCardResult, 0, len(inputs))
+	err := s.withImmediateTx(ctx, func(conn *sql.Conn) error {
+		for _, in := range inputs {
+			res, err := s.putCardConn(ctx, conn, in, nil)
+			if err != nil {
+				return fmt.Errorf("put card %s: %w", in.Href, err)
+			}
+			out = append(out, res)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (s *Store) putCard(ctx context.Context, in PutCardInput, cond *PutCardConditions) (PutCardResult, error) {
+	if in.AddressbookID == 0 {
+		return PutCardResult{}, fmt.Errorf("addressbook_id is required")
+	}
+	if in.Href == "" || in.UID == "" {
+		return PutCardResult{}, fmt.Errorf("href and uid are required")
+	}
+	var out PutCardResult
+	err := s.withImmediateTx(ctx, func(conn *sql.Conn) error {
+		res, err := s.putCardConn(ctx, conn, in, cond)
+		if err != nil {
+			return err
+		}
+		out = res
+		return nil
+	})
+	if err != nil {
+		return PutCardResult{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) putCardConn(ctx context.Context, conn *sql.Conn, in PutCardInput, cond *PutCardConditions) (PutCardResult, error) {
 	if in.AddressbookID == 0 {
 		return PutCardResult{}, fmt.Errorf("addressbook_id is required")
 	}
@@ -630,84 +673,78 @@ func (s *Store) putCard(ctx context.Context, in PutCardInput, cond *PutCardCondi
 	now := s.now().UTC()
 
 	var out PutCardResult
-	err := s.withImmediateTx(ctx, func(conn *sql.Conn) error {
-		var (
-			existing     int
-			existingETag sql.NullString
-		)
-		switch err := conn.QueryRowContext(ctx, `
-			SELECT etag FROM cards WHERE addressbook_id = ? AND href = ?
-		`, in.AddressbookID, in.Href).Scan(&existingETag); {
-		case err == nil:
-			existing = 1
-		case errors.Is(err, sql.ErrNoRows):
-			existing = 0
-		default:
-			return fmt.Errorf("check existing card: %w", err)
-		}
-
-		if cond != nil {
-			if cond.RequireAbsent && existing != 0 {
-				return ErrPreconditionFailed
-			}
-			if cond.ExpectedCurrentETagHex != nil {
-				if existing == 0 || !existingETag.Valid || existingETag.String != *cond.ExpectedCurrentETagHex {
-					return ErrPreconditionFailed
-				}
-			}
-		}
-
-		if existing == 0 {
-			if _, err := conn.ExecContext(ctx, `
-				INSERT INTO cards (addressbook_id, href, uid, etag, vcard_text, mod_time)
-				VALUES (?, ?, ?, ?, ?, ?)
-			`, in.AddressbookID, in.Href, in.UID, etagHex, canonical, now); err != nil {
-				return fmt.Errorf("insert card: %w", err)
-			}
-			out.Created = true
-		} else {
-			if _, err := conn.ExecContext(ctx, `
-				UPDATE cards
-				SET uid = ?, etag = ?, vcard_text = ?, mod_time = ?
-				WHERE addressbook_id = ? AND href = ?
-			`, in.UID, etagHex, canonical, now, in.AddressbookID, in.Href); err != nil {
-				return fmt.Errorf("update card: %w", err)
-			}
-			out.Created = false
-		}
-
-		if _, err := conn.ExecContext(ctx, `
-			UPDATE addressbooks
-			SET revision = revision + 1, updated_at = ?
-			WHERE id = ?
-		`, now, in.AddressbookID); err != nil {
-			return fmt.Errorf("bump addressbook revision: %w", err)
-		}
-		if err := conn.QueryRowContext(ctx, `
-			SELECT revision FROM addressbooks WHERE id = ?
-		`, in.AddressbookID).Scan(&out.Revision); err != nil {
-			return fmt.Errorf("select new revision: %w", err)
-		}
-
-		if s.hooks.BeforeCardChangeInsert != nil {
-			if err := s.hooks.BeforeCardChangeInsert(); err != nil {
-				return fmt.Errorf("before card_changes insert hook: %w", err)
-			}
-		}
-
-		if _, err := conn.ExecContext(ctx, `
-			INSERT INTO card_changes (addressbook_id, href, etag, deleted, revision, changed_at)
-			VALUES (?, ?, ?, 0, ?, ?)
-		`, in.AddressbookID, in.Href, etagHex, out.Revision, now); err != nil {
-			return fmt.Errorf("insert card_change: %w", err)
-		}
-
-		out.ETagHex = etagHex
-		return nil
-	})
-	if err != nil {
-		return PutCardResult{}, err
+	var (
+		existing     int
+		existingETag sql.NullString
+	)
+	switch err := conn.QueryRowContext(ctx, `
+		SELECT etag FROM cards WHERE addressbook_id = ? AND href = ?
+	`, in.AddressbookID, in.Href).Scan(&existingETag); {
+	case err == nil:
+		existing = 1
+	case errors.Is(err, sql.ErrNoRows):
+		existing = 0
+	default:
+		return PutCardResult{}, fmt.Errorf("check existing card: %w", err)
 	}
+
+	if cond != nil {
+		if cond.RequireAbsent && existing != 0 {
+			return PutCardResult{}, ErrPreconditionFailed
+		}
+		if cond.ExpectedCurrentETagHex != nil {
+			if existing == 0 || !existingETag.Valid || existingETag.String != *cond.ExpectedCurrentETagHex {
+				return PutCardResult{}, ErrPreconditionFailed
+			}
+		}
+	}
+
+	if existing == 0 {
+		if _, err := conn.ExecContext(ctx, `
+			INSERT INTO cards (addressbook_id, href, uid, etag, vcard_text, mod_time)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, in.AddressbookID, in.Href, in.UID, etagHex, canonical, now); err != nil {
+			return PutCardResult{}, fmt.Errorf("insert card: %w", err)
+		}
+		out.Created = true
+	} else {
+		if _, err := conn.ExecContext(ctx, `
+			UPDATE cards
+			SET uid = ?, etag = ?, vcard_text = ?, mod_time = ?
+			WHERE addressbook_id = ? AND href = ?
+		`, in.UID, etagHex, canonical, now, in.AddressbookID, in.Href); err != nil {
+			return PutCardResult{}, fmt.Errorf("update card: %w", err)
+		}
+		out.Created = false
+	}
+
+	if _, err := conn.ExecContext(ctx, `
+		UPDATE addressbooks
+		SET revision = revision + 1, updated_at = ?
+		WHERE id = ?
+	`, now, in.AddressbookID); err != nil {
+		return PutCardResult{}, fmt.Errorf("bump addressbook revision: %w", err)
+	}
+	if err := conn.QueryRowContext(ctx, `
+		SELECT revision FROM addressbooks WHERE id = ?
+	`, in.AddressbookID).Scan(&out.Revision); err != nil {
+		return PutCardResult{}, fmt.Errorf("select new revision: %w", err)
+	}
+
+	if s.hooks.BeforeCardChangeInsert != nil {
+		if err := s.hooks.BeforeCardChangeInsert(); err != nil {
+			return PutCardResult{}, fmt.Errorf("before card_changes insert hook: %w", err)
+		}
+	}
+
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO card_changes (addressbook_id, href, etag, deleted, revision, changed_at)
+		VALUES (?, ?, ?, 0, ?, ?)
+	`, in.AddressbookID, in.Href, etagHex, out.Revision, now); err != nil {
+		return PutCardResult{}, fmt.Errorf("insert card_change: %w", err)
+	}
+
+	out.ETagHex = etagHex
 	return out, nil
 }
 
