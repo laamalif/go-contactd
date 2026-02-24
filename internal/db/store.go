@@ -677,6 +677,9 @@ func (s *Store) DeleteCard(ctx context.Context, addressbookID int64, href string
 		if err := conn.QueryRowContext(ctx, `
 			SELECT etag FROM cards WHERE addressbook_id = ? AND href = ?
 		`, addressbookID, href).Scan(&lastETag); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
 			return fmt.Errorf("select card etag for delete: %w", err)
 		}
 

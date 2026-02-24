@@ -975,6 +975,35 @@ func TestHandler_CardDelete_IfMatchEnforced(t *testing.T) {
 	}
 }
 
+func TestHandler_CardDelete_MissingReturns404(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/alice/contacts/missing.vcf", nil)
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusNotFound; got != want {
+		t.Fatalf("DELETE missing status = %d, want %d; body=%q", got, want, rr.Body.String())
+	}
+}
+
 func TestHandler_CardPut_UIDConflict_ReturnsCardDAVPreconditionXML(t *testing.T) {
 	t.Parallel()
 

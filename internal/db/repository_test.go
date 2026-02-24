@@ -238,6 +238,28 @@ func TestStore_DeleteCard_AppendsDeletedChangeAndBumpsRevision(t *testing.T) {
 	}
 }
 
+func TestStore_DeleteCard_MissingReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	userID, err := store.CreateUser(ctx, "alice", "bcrypt-hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	bookID, err := store.CreateAddressbook(ctx, userID, "contacts", "Contacts")
+	if err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+
+	err = store.DeleteCard(ctx, bookID, "missing.vcf")
+	if !errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("DeleteCard missing err = %v, want db.ErrNotFound", err)
+	}
+}
+
 func TestStore_PruneCardChangesByAge(t *testing.T) {
 	t.Parallel()
 
