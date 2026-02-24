@@ -183,6 +183,9 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 	case "addressbook-multiget":
 		h.handleAddressbookMultiGet(w, r, envelope.Hrefs)
 		return
+	case "addressbook-query":
+		h.handleAddressbookQuery(w, r)
+		return
 	default:
 		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
 		return
@@ -205,30 +208,33 @@ func (h *handler) handleAddressbookMultiGet(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		var buf bytes.Buffer
-		if err := vcard.NewEncoder(&buf).Encode(ao.Card); err != nil {
+		resp, err := reportCardResponse(*ao)
+		if err != nil {
 			http.Error(w, "invalid vcard", http.StatusInternalServerError)
 			return
 		}
-		responses = append(responses, davxml.Response{
-			Href: ao.Path,
-			PropStats: []davxml.PropStat{
-				davxml.PropStatOK(davxml.Prop{
-					GetETag:     ao.ETag,
-					AddressData: buf.String(),
-				}),
-			},
-		})
+		responses = append(responses, resp)
 	}
 
-	body, err := davxml.Marshal(davxml.MultiStatus{Responses: responses})
+	writeDAVMultiStatus(w, responses)
+}
+
+func (h *handler) handleAddressbookQuery(w http.ResponseWriter, r *http.Request) {
+	aos, err := h.opts.Backend.QueryAddressObjects(r.Context(), r.URL.Path, nil)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		writeBackendError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	w.WriteHeader(http.StatusMultiStatus)
-	_, _ = w.Write(body)
+	responses := make([]davxml.Response, 0, len(aos))
+	for _, ao := range aos {
+		resp, err := reportCardResponse(ao)
+		if err != nil {
+			http.Error(w, "invalid vcard", http.StatusInternalServerError)
+			return
+		}
+		responses = append(responses, resp)
+	}
+	writeDAVMultiStatus(w, responses)
 }
 
 func parsePropfindDepth(w http.ResponseWriter, r *http.Request) (int, bool) {
@@ -478,6 +484,33 @@ func writeBackendError(w http.ResponseWriter, err error) {
 		return
 	}
 	http.Error(w, "internal error", http.StatusInternalServerError)
+}
+
+func writeDAVMultiStatus(w http.ResponseWriter, responses []davxml.Response) {
+	body, err := davxml.Marshal(davxml.MultiStatus{Responses: responses})
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.WriteHeader(http.StatusMultiStatus)
+	_, _ = w.Write(body)
+}
+
+func reportCardResponse(ao gocarddav.AddressObject) (davxml.Response, error) {
+	var buf bytes.Buffer
+	if err := vcard.NewEncoder(&buf).Encode(ao.Card); err != nil {
+		return davxml.Response{}, err
+	}
+	return davxml.Response{
+		Href: ao.Path,
+		PropStats: []davxml.PropStat{
+			davxml.PropStatOK(davxml.Prop{
+				GetETag:     ao.ETag,
+				AddressData: buf.String(),
+			}),
+		},
+	}, nil
 }
 
 func httpStatusFromError(err error) (int, bool) {

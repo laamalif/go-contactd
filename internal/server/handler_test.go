@@ -406,6 +406,70 @@ func TestHandler_Report_AddressbookMultiget_ReturnsSubsetAnd404(t *testing.T) {
 	}
 }
 
+func TestHandler_Report_AddressbookQuery_ReturnsCardsWithAddressData(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject a: %v", err)
+	}
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/b.vcf", mustSampleCard("uid-b", "Alice B"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject b: %v", err)
+	}
+	h := newAuthedHandlerForTests(backend)
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:prop>
+    <D:getetag/>
+    <C:address-data/>
+  </D:prop>
+</C:addressbook-query>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("REPORT query status = %d, want %d", got, want)
+	}
+	var doc struct {
+		Responses []struct {
+			Href     string `xml:"href"`
+			PropStat []struct {
+				Prop struct {
+					GetETag     string `xml:"getetag"`
+					AddressData string `xml:"address-data"`
+				} `xml:"prop"`
+			} `xml:"propstat"`
+		} `xml:"response"`
+	}
+	if err := xml.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("xml.Unmarshal REPORT query: %v body=%q", err, rr.Body.String())
+	}
+	if len(doc.Responses) != 2 {
+		t.Fatalf("len(responses) = %d, want 2", len(doc.Responses))
+	}
+	if !containsString([]string{doc.Responses[0].Href, doc.Responses[1].Href}, "/alice/contacts/a.vcf") {
+		t.Fatalf("query responses missing a.vcf: %+v", doc.Responses)
+	}
+	if !containsString([]string{doc.Responses[0].Href, doc.Responses[1].Href}, "/alice/contacts/b.vcf") {
+		t.Fatalf("query responses missing b.vcf: %+v", doc.Responses)
+	}
+	for i, resp := range doc.Responses {
+		if len(resp.PropStat) == 0 || resp.PropStat[0].Prop.GetETag == "" {
+			t.Fatalf("response[%d] missing getetag: %+v", i, resp)
+		}
+		if !strings.Contains(resp.PropStat[0].Prop.AddressData, "BEGIN:VCARD") {
+			t.Fatalf("response[%d] missing address-data: %+v", i, resp)
+		}
+	}
+}
+
 func openServerBackend(t *testing.T) (*db.Store, *contactcarddav.Backend) {
 	t.Helper()
 	store, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "contactd.sqlite"))
