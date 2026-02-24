@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,4 +189,103 @@ func TestServeHTTPGracefully_ListenFailureReturns1(t *testing.T) {
 	if shutdownCalled {
 		t.Fatal("Shutdown should not be called when listen fails immediately without cancellation")
 	}
+}
+
+func TestPrepareServeRuntime_SyncTokenContinuesAcrossRestart(t *testing.T) {
+	t.Parallel()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword: %v", err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "contactd.sqlite")
+	env := map[string]string{
+		"CONTACTD_DB_PATH": dbPath,
+		"CONTACTD_USERS":   "alice:" + string(hash),
+	}
+
+	rt1, err := prepareServeRuntime(context.Background(), nil, env, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("prepareServeRuntime first: %v", err)
+	}
+	if err := putCardForTest(rt1.handler, "/alice/contacts/a.vcf", "uid-a", "Alice A"); err != nil {
+		_ = rt1.close()
+		t.Fatalf("put first card: %v", err)
+	}
+	token1, body1, err := syncReportForTest(rt1.handler, "")
+	if err != nil {
+		_ = rt1.close()
+		t.Fatalf("initial sync report: %v body=%q", err, body1)
+	}
+	if token1 == "" {
+		_ = rt1.close()
+		t.Fatalf("initial sync token empty body=%q", body1)
+	}
+	if err := rt1.close(); err != nil {
+		t.Fatalf("close first runtime: %v", err)
+	}
+
+	rt2, err := prepareServeRuntime(context.Background(), nil, env, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("prepareServeRuntime second: %v", err)
+	}
+	defer func() { _ = rt2.close() }()
+
+	if err := putCardForTest(rt2.handler, "/alice/contacts/b.vcf", "uid-b", "Bob B"); err != nil {
+		t.Fatalf("put second card after restart: %v", err)
+	}
+
+	token2, body2, err := syncReportForTest(rt2.handler, token1)
+	if err != nil {
+		t.Fatalf("delta sync after restart: %v body=%q", err, body2)
+	}
+	if token2 == "" {
+		t.Fatalf("delta sync token empty body=%q", body2)
+	}
+	if strings.Contains(body2, "valid-sync-token") {
+		t.Fatalf("delta sync after restart returned invalid token error body=%q", body2)
+	}
+	if !strings.Contains(body2, "/alice/contacts/b.vcf") {
+		t.Fatalf("delta sync after restart missing new href body=%q", body2)
+	}
+}
+
+func putCardForTest(h http.Handler, path, uid, fn string) error {
+	req := httptest.NewRequest(http.MethodPut, path, bytes.NewBufferString(testVCard(uid, fn)))
+	req.Header.Set("Content-Type", "text/vcard; charset=utf-8")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated && rr.Code != http.StatusNoContent {
+		return errors.New("unexpected PUT status " + rr.Result().Status + " body=" + rr.Body.String())
+	}
+	return nil
+}
+
+func syncReportForTest(h http.Handler, token string) (string, string, error) {
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:sync-collection xmlns:D="DAV:">
+  <D:sync-token>` + token + `</D:sync-token>
+  <D:sync-level>1</D:sync-level>
+</D:sync-collection>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	body := rr.Body.String()
+	if rr.Code != http.StatusMultiStatus {
+		return "", body, errors.New("unexpected REPORT status " + rr.Result().Status)
+	}
+	var doc struct {
+		SyncToken string `xml:"sync-token"`
+	}
+	if err := xml.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		return "", body, err
+	}
+	return strings.TrimSpace(doc.SyncToken), body, nil
+}
+
+func testVCard(uid, fn string) string {
+	return "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:" + uid + "\r\nFN:" + fn + "\r\nEND:VCARD\r\n"
 }
