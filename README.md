@@ -45,20 +45,37 @@ Compose assets:
 
 ## CLI Reference
 
-Root command:
+Primary binaries / modes:
 
 ```bash
-go-contactd <subcommand>
+contactd [flags]
+contactctl user <add|list|delete|passwd>
 ```
 
-Subcommands:
+`contactd` is the daemon (old-school `sshd/httpd` style). `contactctl` is the admin utility (same binary code, different behavior selected by executable name/`argv[0]`).
 
-- `serve [flags]` start HTTP server
-- `user add --username (--password | --password-stdin) [--db-path --default-book-slug --default-book-name]`
-- `user list [--db-path] [--format table|json]`
-- `user delete (--username | --id) [--db-path]`
-- `user passwd (--username | --id) (--password | --password-stdin) [--db-path]`
-- `version [--format text|json]` prints build metadata
+Daemon (`contactd`) examples:
+
+- `contactd` start server using env/defaults
+- `contactd -l :8080` listen on explicit address
+- `contactd -p 8080` convenience port shorthand (`:8080`)
+- `contactd -d /var/db/contactd.db` select DB path
+- `contactd -V` print version and exit
+- `contactd -h` print daemon help
+
+Admin (`contactctl`) examples:
+
+- `contactctl user add --username alice --password-stdin [-d /path/to/db]`
+- `contactctl user list [-d /path/to/db] [--format table|json]`
+- `contactctl user delete (--username | --id) [-d /path/to/db]`
+- `contactctl user passwd (--username | --id) (--password | --password-stdin) [-d /path/to/db]`
+- `contactctl -V` print version and exit
+
+Compatibility (still supported, not preferred):
+
+- `go-contactd serve ...`
+- `go-contactd user ...`
+- `go-contactd version ...`
 
 Common exit codes:
 
@@ -70,6 +87,12 @@ Common exit codes:
 ## Serve Config (Env / Flags)
 
 Config precedence is: flags > env vars > defaults.
+
+Common daemon aliases:
+
+- `-l` = `--listen-addr`
+- `-p` = `--port`
+- `-d` = `--db-path`
 
 Core runtime:
 
@@ -142,7 +165,7 @@ Current runtime logs are intentionally minimal (startup/listen/shutdown/error pa
 1. Create a user:
 
    ```bash
-   printf '%s\n' 'secret' | go run ./cmd/contactd user add --db-path /path/to/contactd.sqlite --username alice --password-stdin
+   printf '%s\n' 'secret' | contactctl user add -d /path/to/contactd.sqlite --username alice --password-stdin
    ```
 
 2. Start the server (direct or via Docker/compose).
@@ -190,29 +213,37 @@ For the provided distroless container image, the runtime user is non-root (typic
 Native build:
 
 ```bash
-go build -o go-contactd ./cmd/contactd
+go build -o contactd ./cmd/contactd
+ln -sf ./contactd ./contactctl
 ```
 
 Cross-compile examples:
 
 ```bash
-GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 go build -o go-contactd-freebsd-amd64 ./cmd/contactd
-GOOS=openbsd GOARCH=amd64 CGO_ENABLED=0 go build -o go-contactd-openbsd-amd64 ./cmd/contactd
+GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 go build -o contactd-freebsd-amd64 ./cmd/contactd
+GOOS=openbsd GOARCH=amd64 CGO_ENABLED=0 go build -o contactd-openbsd-amd64 ./cmd/contactd
 ```
 
-Run directly:
+Run directly (daemon mode):
 
 ```bash
 CONTACTD_DB_PATH=/var/lib/contactd/contactd.sqlite \
 CONTACTD_LISTEN_ADDR=127.0.0.1:8080 \
-./go-contactd serve
+./contactd
+```
+
+Create admin alias locally (recommended for operator UX):
+
+```bash
+ln -sf ./contactd ./contactctl
+./contactctl user -h
 ```
 
 ## Service Examples
 
 ### systemd (Linux)
 
-Example unit (`/etc/systemd/system/go-contactd.service`):
+Example unit (`/etc/systemd/system/contactd.service`):
 
 ```ini
 [Unit]
@@ -225,7 +256,7 @@ User=contactd
 Group=contactd
 Environment=CONTACTD_DB_PATH=/var/lib/contactd/contactd.sqlite
 Environment=CONTACTD_LISTEN_ADDR=127.0.0.1:8080
-ExecStart=/usr/local/bin/go-contactd serve
+ExecStart=/usr/local/bin/contactd
 Restart=on-failure
 RestartSec=2s
 
@@ -250,10 +281,10 @@ rcvar=contactd_enable
 : ${contactd_enable:=NO}
 : ${contactd_user:=www}
 : ${contactd_group:=www}
-: ${contactd_flags:="serve"}
+: ${contactd_flags:=""}
 : ${contactd_env:="CONTACTD_DB_PATH=/var/db/contactd/contactd.sqlite CONTACTD_LISTEN_ADDR=127.0.0.1:8080"}
 
-command=/usr/local/bin/go-contactd
+command=/usr/local/bin/contactd
 command_args="${contactd_flags}"
 start_cmd="contactd_start"
 
@@ -267,13 +298,13 @@ run_rc_command "$1"
 
 ### OpenBSD rcctl (example)
 
-If installed as `/usr/local/bin/go-contactd`, run behind `rcctl` with a small wrapper script that exports env vars, for example `/usr/local/bin/contactd-wrapper`:
+If installed as `/usr/local/bin/contactd`, run behind `rcctl` with a small wrapper script that exports env vars, for example `/usr/local/bin/contactd-wrapper`:
 
 ```sh
 #!/bin/sh
 export CONTACTD_DB_PATH=/var/contactd/contactd.sqlite
 export CONTACTD_LISTEN_ADDR=127.0.0.1:8080
-exec /usr/local/bin/go-contactd serve
+exec /usr/local/bin/contactd
 ```
 
 Then:

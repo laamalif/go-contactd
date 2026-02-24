@@ -28,6 +28,7 @@ STRICT_PLAN="${DAVX5_SIM_STRICT_PLAN:-0}"
 CURL_CONNECT_TIMEOUT="${DAVX5_SIM_CURL_CONNECT_TIMEOUT:-2}"
 CURL_MAX_TIME="${DAVX5_SIM_CURL_MAX_TIME:-10}"
 BIN="${TMP_DIR}/go-contactd"
+ADMIN_BIN="${TMP_DIR}/contactctl"
 DB="${TMP_DIR}/contactd.sqlite"
 LOG="${TMP_DIR}/server.log"
 PID=""
@@ -175,7 +176,7 @@ wait_ready() {
 start_server() {
   : >"${LOG}"
   CONTACTD_DB_PATH="${DB}" CONTACTD_LISTEN_ADDR="${LISTEN_ADDR}" CONTACTD_BASE_URL="${SERVER_BASE_URL}" \
-    "${BIN}" serve >"${TMP_DIR}/stdout.log" 2>"${LOG}" &
+    "${BIN}" >"${TMP_DIR}/stdout.log" 2>"${LOG}" &
   PID=$!
   wait_ready
 }
@@ -279,7 +280,8 @@ XMLEOF
 # ── build & start ────────────────────────────────────────────────────────────
 
 step "Building go-contactd"
-(cd "${ROOT_DIR}" && go build -o "${BIN}" ./cmd/contactd)
+  (cd "${ROOT_DIR}" && go build -o "${BIN}" ./cmd/contactd)
+  ln -sf "${BIN}" "${ADMIN_BIN}"
 ok "binary built"
 
 step "Starting server"
@@ -287,7 +289,7 @@ start_server
 ok "server ready"
 
 step "Creating test user via CLI"
-printf '%s\n' "secret" | "${BIN}" user add --db-path "${DB}" --username alice --password-stdin >/dev/null
+printf '%s\n' "secret" | "${ADMIN_BIN}" user add -d "${DB}" --username alice --password-stdin >/dev/null
 ok "user alice created"
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -660,7 +662,7 @@ expect 415 "missing Content-Type → 415"
 step "Phase 15: Cross-User Isolation"
 
 # Create a second user
-printf '%s\n' "evil" | "${BIN}" user add --db-path "${DB}" --username mallory --password-stdin >/dev/null
+printf '%s\n' "evil" | "${ADMIN_BIN}" user add -d "${DB}" --username mallory --password-stdin >/dev/null
 ok "user mallory created"
 
 # alice tries to read mallory's contacts → 404 (not 403)

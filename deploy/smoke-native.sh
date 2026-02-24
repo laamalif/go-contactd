@@ -7,6 +7,7 @@ PORT="${CONTACTD_SMOKE_PORT:-18080}"
 LISTEN_ADDR="127.0.0.1:${PORT}"
 BASE_URL="http://${LISTEN_ADDR}"
 BIN_PATH="${TMP_DIR}/go-contactd"
+ADMIN_BIN_PATH="${TMP_DIR}/contactctl"
 DB_PATH="${TMP_DIR}/contactd.sqlite"
 SERVER_LOG="${TMP_DIR}/server.log"
 SERVER_PID=""
@@ -51,7 +52,7 @@ start_server() {
   : >"${SERVER_LOG}"
   CONTACTD_DB_PATH="${DB_PATH}" \
   CONTACTD_LISTEN_ADDR="${LISTEN_ADDR}" \
-  "${BIN_PATH}" serve >"${TMP_DIR}/server.stdout" 2>"${SERVER_LOG}" &
+  "${BIN_PATH}" >"${TMP_DIR}/server.stdout" 2>"${SERVER_LOG}" &
   SERVER_PID=$!
   wait_for_200 "/healthz"
   wait_for_200 "/readyz"
@@ -90,12 +91,13 @@ SYNC_EMPTY='<?xml version="1.0" encoding="utf-8"?><D:sync-collection xmlns:D="DA
 
 log "building native binary"
 (cd "${ROOT_DIR}" && go build -o "${BIN_PATH}" ./cmd/contactd)
+ln -sf "${BIN_PATH}" "${ADMIN_BIN_PATH}"
 
 log "starting server"
 start_server
 
 log "creating user via CLI"
-"${BIN_PATH}" user add --db-path "${DB_PATH}" --username alice --password secret >/dev/null
+"${ADMIN_BIN_PATH}" user add -d "${DB_PATH}" --username alice --password secret >/dev/null
 
 log "checking well-known redirect"
 resp="$(curl -sS -i "${BASE_URL}/.well-known/carddav")"
