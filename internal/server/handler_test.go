@@ -3,9 +3,11 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -840,6 +842,48 @@ func TestHandler_CardRoundTripFidelity_PreservesUnicodeAndPhotoPayload(t *testin
 	}
 	if !strings.Contains(gotBody, photo) {
 		t.Fatalf("GET body missing photo payload: %q", gotBody)
+	}
+	wantETag := `"` + fmt.Sprintf("%x", sha256.Sum256(getRes.Body.Bytes())) + `"`
+	if got := getRes.Header().Get("ETag"); got != wantETag {
+		t.Fatalf("GET ETag = %q, want SHA256(body) %q; body=%q", got, wantETag, gotBody)
+	}
+}
+
+func TestHandler_CardGet_StrongETagMatchesReturnedBytes_ForStoredFoldedVCard(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), "alice", "contacts")
+	if err != nil {
+		t.Fatalf("GetAddressbookByUsernameSlug: %v", err)
+	}
+	// Deliberately store a folded NOTE line; handler GET must return the stored bytes
+	// (or exact canonical bytes) for strong ETag correctness.
+	folded := "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-fold\r\nFN:Folded\r\nNOTE:" +
+		strings.Repeat("A", 90) + "\r\n " + strings.Repeat("B", 40) + "\r\nEND:VCARD\r\n"
+	if _, err := store.PutCard(context.Background(), db.PutCardInput{
+		AddressbookID: ab.ID,
+		Href:          "folded.vcf",
+		UID:           "uid-fold",
+		VCard:         []byte(folded),
+	}); err != nil {
+		t.Fatalf("PutCard folded: %v", err)
+	}
+
+	h := newAuthedHandlerForTests(backend)
+	getReq := httptest.NewRequest(http.MethodGet, "/alice/contacts/folded.vcf", nil)
+	getReq.SetBasicAuth("alice", "secret")
+	getRes := httptest.NewRecorder()
+	h.ServeHTTP(getRes, getReq)
+	if got, want := getRes.Code, http.StatusOK; got != want {
+		t.Fatalf("GET status = %d, want %d body=%q", got, want, getRes.Body.String())
+	}
+	wantETag := `"` + fmt.Sprintf("%x", sha256.Sum256(getRes.Body.Bytes())) + `"`
+	if got := getRes.Header().Get("ETag"); got != wantETag {
+		t.Fatalf("GET ETag = %q, want SHA256(body) %q; body=%q", got, wantETag, getRes.Body.String())
 	}
 }
 

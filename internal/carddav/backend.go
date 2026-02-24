@@ -140,23 +140,28 @@ func (b *Backend) GetAddressBookColor(ctx context.Context, p string) (string, er
 }
 
 func (b *Backend) GetAddressObject(ctx context.Context, p string, _ *gocarddav.AddressDataRequest) (*gocarddav.AddressObject, error) {
+	ao, _, err := b.GetAddressObjectWithRaw(ctx, p, nil)
+	return ao, err
+}
+
+func (b *Backend) GetAddressObjectWithRaw(ctx context.Context, p string, _ *gocarddav.AddressDataRequest) (*gocarddav.AddressObject, []byte, error) {
 	user, slug, href, err := parseCardPathForPrincipal(ctx, p)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ab, err := b.store.GetAddressbookByUsernameSlug(ctx, user, slug)
 	if err != nil {
-		return nil, mapStoreErr(err)
+		return nil, nil, mapStoreErr(err)
 	}
 	row, err := b.store.GetCard(ctx, ab.ID, href)
 	if err != nil {
-		return nil, mapStoreErr(err)
+		return nil, nil, mapStoreErr(err)
 	}
 	ao, err := toAddressObject(user, slug, row)
 	if err != nil {
-		return nil, webdav.NewHTTPError(http.StatusInternalServerError, err)
+		return nil, nil, webdav.NewHTTPError(http.StatusInternalServerError, err)
 	}
-	return &ao, nil
+	return &ao, row.VCard, nil
 }
 
 func (b *Backend) ListAddressObjects(ctx context.Context, p string, _ *gocarddav.AddressDataRequest) ([]gocarddav.AddressObject, error) {

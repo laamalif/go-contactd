@@ -99,6 +99,10 @@ type addressObjectPutWithStatus interface {
 	PutAddressObjectWithStatus(ctx context.Context, p string, card vcard.Card, opts *gocarddav.PutAddressObjectOptions) (*gocarddav.AddressObject, bool, error)
 }
 
+type addressObjectGetWithRaw interface {
+	GetAddressObjectWithRaw(ctx context.Context, p string, req *gocarddav.AddressDataRequest) (*gocarddav.AddressObject, []byte, error)
+}
+
 type addressObjectDeleteWithCurrentETag interface {
 	DeleteAddressObjectWithCurrentETag(ctx context.Context, p string, currentETag string) error
 }
@@ -1260,23 +1264,35 @@ func (h *handler) addressbookCollectionState(ctx context.Context, abPath string)
 }
 
 func (h *handler) handleCardGet(w http.ResponseWriter, r *http.Request) {
-	ao, err := h.opts.Backend.GetAddressObject(r.Context(), r.URL.Path, nil)
+	var (
+		ao  *gocarddav.AddressObject
+		raw []byte
+		err error
+	)
+	if be, ok := h.opts.Backend.(addressObjectGetWithRaw); ok {
+		ao, raw, err = be.GetAddressObjectWithRaw(r.Context(), r.URL.Path, nil)
+	} else {
+		ao, err = h.opts.Backend.GetAddressObject(r.Context(), r.URL.Path, nil)
+	}
 	if err != nil {
 		writeBackendError(w, err)
 		return
 	}
-	var buf bytes.Buffer
-	if err := vcard.NewEncoder(&buf).Encode(ao.Card); err != nil {
-		http.Error(w, "invalid vcard", http.StatusInternalServerError)
-		return
+	if raw == nil {
+		var buf bytes.Buffer
+		if err := vcard.NewEncoder(&buf).Encode(ao.Card); err != nil {
+			http.Error(w, "invalid vcard", http.StatusInternalServerError)
+			return
+		}
+		raw = buf.Bytes()
 	}
 	w.Header().Set("Content-Type", "text/vcard")
 	if ao.ETag != "" {
 		w.Header().Set("ETag", ao.ETag)
 	}
-	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(buf.Bytes())
+	_, _ = w.Write(raw)
 }
 
 func (h *handler) handleCardPut(w http.ResponseWriter, r *http.Request) {
