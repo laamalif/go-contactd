@@ -1,6 +1,6 @@
 # go-contactd
 
-Minimal, container-ready CardDAV server for DAVx5 using Go + SQLite (WAL mode).
+CardDAV server for DAVx5 using Go and SQLite (WAL).
 
 Installed binary names use daemon-style naming:
 - `contactd` (daemon)
@@ -8,10 +8,10 @@ Installed binary names use daemon-style naming:
 
 ## Status
 
-- Storage backend: SQLite only (`modernc.org/sqlite`)
-- Auth: Basic Auth (DB-backed at runtime; env seed is bootstrap-only)
-- Protocol: CardDAV core flows, sync-collection, PROPFIND/PROPPATCH extensions
-- Deployment: HTTP service behind reverse proxy (TLS terminated upstream)
+- SQLite only (`modernc.org/sqlite`)
+- Basic Auth (DB-backed at runtime; env seed is bootstrap-only)
+- CardDAV core flows + `sync-collection` + `PROPFIND`/`PROPPATCH` extensions
+- HTTP service behind reverse proxy (TLS terminated upstream)
 
 ## Quick Start (Docker)
 
@@ -54,9 +54,11 @@ Primary binaries / modes:
 ```bash
 contactd [flags]
 contactctl user <add|list|delete|passwd>
+contactctl export [flags]
+contactctl import [flags] <file-or-dir>
 ```
 
-`contactd` is the daemon (old-school `sshd/httpd` style). `contactctl` is the admin utility (separate binary, shared internal code).
+`contactd` is the daemon (`sshd/httpd` style). `contactctl` is the admin utility.
 
 Daemon (`contactd`) examples:
 
@@ -73,6 +75,11 @@ Admin (`contactctl`) examples:
 - `contactctl user list [-d /path/to/db] [--format table|json]`
 - `contactctl user delete (--username | --id) [-d /path/to/db]`
 - `contactctl user passwd (--username | --id) (--password | --password-stdin) [-d /path/to/db]`
+- `contactctl export --username alice --format dir --out ./backup [-d /path/to/db]`
+- `contactctl export --username alice --format concat [-d /path/to/db] > alice.vcf`
+- `contactctl import --username bob [-d /path/to/db] ./backup`
+- `contactctl import --username bob [-d /path/to/db] ./contacts.vcf`
+- `contactctl export --dry-run ...` / `contactctl import --dry-run ...` (validate + summarize only)
 - `contactctl -V` print version and exit
 
 Common exit codes:
@@ -143,13 +150,13 @@ Seed behavior:
 ## Logging and Redaction Policy
 
 - Logs are emitted to `stderr`
-- CLI subcommands keep `stdout` deterministic/script-friendly
+- `contactd` writes daemon/access logs; `contactctl` keeps `stdout` deterministic/script-friendly
 - Never log:
   - `Authorization` header values
   - raw vCard payloads
   - password material / bcrypt seeds
 
-Current runtime logs are intentionally minimal (startup/listen/shutdown/error paths). Access-log formatting described in `AGENTS.md` is a future hardening item.
+`contactd` text logs use daemon-style formatting by default. `--log-format json` emits structured JSON logs.
 
 ## Reverse Proxy Guidance
 
@@ -212,7 +219,7 @@ Native build:
 
 ```bash
 go build -o contactd ./cmd/contactd
-ln -sf ./contactd ./contactctl
+go build -o contactctl ./cmd/contactctl
 ```
 
 Cross-compile examples:
@@ -230,10 +237,10 @@ CONTACTD_LISTEN_ADDR=127.0.0.1:8080 \
 ./contactd
 ```
 
-Create admin alias locally (recommended for operator UX):
+Build admin utility binary:
 
 ```bash
-ln -sf ./contactd ./contactctl
+go build -o contactctl ./cmd/contactctl
 ./contactctl user -h
 ```
 
