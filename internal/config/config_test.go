@@ -132,6 +132,94 @@ func TestLoadServeConfig_BaseURLAndPruneInterval_ParseAndPriority(t *testing.T) 
 	}
 }
 
+func TestLoadServeConfig_ServeAliasesAndPortConvenience(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		args []string
+		want func(t *testing.T, cfg config.ServeConfig)
+	}{
+		{
+			name: "listen alias",
+			args: []string{"--listen", ":7070"},
+			want: func(t *testing.T, cfg config.ServeConfig) {
+				t.Helper()
+				if got, want := cfg.ListenAddr, ":7070"; got != want {
+					t.Fatalf("ListenAddr=%q want %q", got, want)
+				}
+			},
+		},
+		{
+			name: "bind alias",
+			args: []string{"--bind", "127.0.0.1:7071"},
+			want: func(t *testing.T, cfg config.ServeConfig) {
+				t.Helper()
+				if got, want := cfg.ListenAddr, "127.0.0.1:7071"; got != want {
+					t.Fatalf("ListenAddr=%q want %q", got, want)
+				}
+			},
+		},
+		{
+			name: "db alias",
+			args: []string{"--db", "/tmp/x.sqlite"},
+			want: func(t *testing.T, cfg config.ServeConfig) {
+				t.Helper()
+				if got, want := cfg.DBPath, "/tmp/x.sqlite"; got != want {
+					t.Fatalf("DBPath=%q want %q", got, want)
+				}
+			},
+		},
+		{
+			name: "port convenience",
+			args: []string{"--port", "9090"},
+			want: func(t *testing.T, cfg config.ServeConfig) {
+				t.Helper()
+				if got, want := cfg.ListenAddr, ":9090"; got != want {
+					t.Fatalf("ListenAddr=%q want %q", got, want)
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := config.LoadServeConfig(tc.args, map[string]string{})
+			if err != nil {
+				t.Fatalf("LoadServeConfig(%v) error: %v", tc.args, err)
+			}
+			tc.want(t, cfg)
+		})
+	}
+}
+
+func TestLoadServeConfig_PortAndListenAddrConflictRejected(t *testing.T) {
+	t.Parallel()
+
+	_, err := config.LoadServeConfig([]string{"--port", "9090", "--listen-addr", ":8080"}, map[string]string{})
+	if err == nil {
+		t.Fatal("LoadServeConfig conflict error=nil, want error")
+	}
+	if got := err.Error(); !strings.Contains(got, "--port") || !strings.Contains(got, "--listen-addr") {
+		t.Fatalf("conflict error=%q, want port/listen-addr mention", got)
+	}
+}
+
+func TestLoadServeConfig_InvalidPortRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{
+		{"--port", "0"},
+		{"--port", "65536"},
+	} {
+		if _, err := config.LoadServeConfig(args, map[string]string{}); err == nil {
+			t.Fatalf("LoadServeConfig(%v) error=nil, want invalid port", args)
+		}
+	}
+}
+
 func TestLoadServeConfig_InvalidBaseURLAndPruneIntervalRejected(t *testing.T) {
 	t.Parallel()
 

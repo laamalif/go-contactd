@@ -48,6 +48,9 @@ func runMainWithInput(args []string, env map[string]string, stdin io.Reader, std
 		printRootUsage(stderr)
 		return 2
 	}
+	if args[0] == "--version" || args[0] == "-V" {
+		return runVersion(nil, stdout, stderr)
+	}
 	if isHelpToken(args[0]) {
 		printRootHelp(stdout)
 		return 0
@@ -76,6 +79,10 @@ func runMainWithInput(args []string, env map[string]string, stdin io.Reader, std
 
 	switch args[0] {
 	case "serve":
+		if len(args) > 1 && (isHelpToken(args[1]) || args[1] == "help") {
+			printServeHelp(stdout)
+			return 0
+		}
 		return runServe(args[1:], env, stderr)
 	case "user":
 		return runUser(args[1:], env, stdin, stdout, stderr)
@@ -89,6 +96,10 @@ func runMainWithInput(args []string, env map[string]string, stdin io.Reader, std
 }
 
 func runVersion(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && (isHelpToken(args[0]) || args[0] == "help") {
+		printVersionHelp(stdout)
+		return 0
+	}
 	fs := newCLIFlagSet("version")
 	format := "text"
 	fs.StringVar(&format, "format", format, "text|json")
@@ -127,6 +138,10 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 }
 
 func runServe(args []string, env map[string]string, stderr io.Writer) int {
+	if len(args) > 0 && (isHelpToken(args[0]) || args[0] == "help") {
+		printServeHelp(stderr)
+		return 0
+	}
 	rt, err := prepareServeRuntime(context.Background(), args, env, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "startup error: %v\n", err)
@@ -263,6 +278,9 @@ func printUserHelp(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  list    list users")
 	_, _ = fmt.Fprintln(w, "  delete  delete a user by --username or --id")
 	_, _ = fmt.Fprintln(w, "  passwd  update a user password (supports --password-stdin)")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "notes:")
+	_, _ = fmt.Fprintln(w, "  --db is a short alias for --db-path on all user subcommands")
 }
 
 func printVersionHelp(w io.Writer) {
@@ -271,12 +289,43 @@ func printVersionHelp(w io.Writer) {
 
 func printServeHelp(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "usage: go-contactd serve [flags]")
-	_, _ = fmt.Fprintln(w, "hint: run 'go-contactd serve' with env vars or flags; see README for deployment examples")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "common flags:")
+	_, _ = fmt.Fprintln(w, "  --listen-addr <addr>   canonical listen address (aliases: --listen, --bind, --addr)")
+	_, _ = fmt.Fprintln(w, "  --port <n>             convenience port (conflicts with --listen-addr and aliases)")
+	_, _ = fmt.Fprintln(w, "  --db-path <path>       sqlite db path (alias: --db)")
+	_, _ = fmt.Fprintln(w, "  --base-url <url>       absolute redirect base URL (alias: --url)")
+	_, _ = fmt.Fprintln(w, "  --log-level <level>    debug|info|warn|error (alias: --level)")
+	_, _ = fmt.Fprintln(w, "  --log-format <fmt>     text|json")
+	_, _ = fmt.Fprintln(w, "  --trust-proxy-headers  trust X-Forwarded-* (alias: --trust-proxy)")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "config precedence: flags > env vars > defaults")
+	_, _ = fmt.Fprintln(w, "see README.md for full env/flag reference")
+}
+
+func printUserAddHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "usage: go-contactd user add --username <name> (--password <pw> | --password-stdin) [--db-path <path>|--db <path>] [--default-book-slug <slug>] [--default-book-name <name>]")
+}
+
+func printUserListHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "usage: go-contactd user list [--db-path <path>|--db <path>] [--format table|json]")
+}
+
+func printUserDeleteHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "usage: go-contactd user delete (--username <name> | --id <id>) [--db-path <path>|--db <path>]")
+}
+
+func printUserPasswdHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "usage: go-contactd user passwd (--username <name> | --id <id>) (--password <pw> | --password-stdin) [--db-path <path>|--db <path>]")
 }
 
 const defaultCLIDBPath = "/var/db/contactd.db"
 
 func runUserAdd(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && (isHelpToken(args[0]) || args[0] == "help") {
+		printUserAddHelp(stdout)
+		return 0
+	}
 	fs := newCLIFlagSet("user add")
 	var (
 		dbPath   = defaultCLIOpt(env["CONTACTD_DB_PATH"], defaultCLIDBPath)
@@ -287,6 +336,7 @@ func runUserAdd(args []string, env map[string]string, stdin io.Reader, stdout, s
 		bookName = defaultCLIOpt(env["CONTACTD_DEFAULT_BOOK_NAME"], "Contacts")
 	)
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
+	fs.StringVar(&dbPath, "db", dbPath, "alias for --db-path")
 	fs.StringVar(&username, "username", "", "username")
 	fs.StringVar(&password, "password", "", "password")
 	fs.BoolVar(&pwStdin, "password-stdin", false, "read password from stdin (safer than argv)")
@@ -342,10 +392,15 @@ func runUserAdd(args []string, env map[string]string, stdin io.Reader, stdout, s
 }
 
 func runUserList(args []string, env map[string]string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && (isHelpToken(args[0]) || args[0] == "help") {
+		printUserListHelp(stdout)
+		return 0
+	}
 	fs := newCLIFlagSet("user list")
 	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], defaultCLIDBPath)
 	format := "table"
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
+	fs.StringVar(&dbPath, "db", dbPath, "alias for --db-path")
 	fs.StringVar(&format, "format", format, "table|json")
 	if err := fs.Parse(args); err != nil {
 		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
@@ -398,11 +453,16 @@ func runUserList(args []string, env map[string]string, stdout, stderr io.Writer)
 }
 
 func runUserDelete(args []string, env map[string]string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && (isHelpToken(args[0]) || args[0] == "help") {
+		printUserDeleteHelp(stdout)
+		return 0
+	}
 	fs := newCLIFlagSet("user delete")
 	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], defaultCLIDBPath)
 	var username string
 	var id int64
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
+	fs.StringVar(&dbPath, "db", dbPath, "alias for --db-path")
 	fs.StringVar(&username, "username", "", "username")
 	fs.Int64Var(&id, "id", 0, "user id")
 	if err := fs.Parse(args); err != nil {
@@ -448,6 +508,10 @@ func runUserDelete(args []string, env map[string]string, stdout, stderr io.Write
 }
 
 func runUserPasswd(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && (isHelpToken(args[0]) || args[0] == "help") {
+		printUserPasswdHelp(stdout)
+		return 0
+	}
 	fs := newCLIFlagSet("user passwd")
 	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], defaultCLIDBPath)
 	var username string
@@ -455,6 +519,7 @@ func runUserPasswd(args []string, env map[string]string, stdin io.Reader, stdout
 	var password string
 	var pwStdin bool
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
+	fs.StringVar(&dbPath, "db", dbPath, "alias for --db-path")
 	fs.StringVar(&username, "username", "", "username")
 	fs.Int64Var(&id, "id", 0, "user id")
 	fs.StringVar(&password, "password", "", "password")

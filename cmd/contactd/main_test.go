@@ -337,6 +337,32 @@ func TestRunMain_UserHelpFlagsAndSubcommand(t *testing.T) {
 	}
 }
 
+func TestRunMain_ServeHelpFlagPrintsHelp(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{{"serve", "--help"}, {"serve", "-h"}} {
+		args := args
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			t.Parallel()
+			var stdout, stderr bytes.Buffer
+			code := runMain(args, map[string]string{}, &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("runMain(%v) code = %d, want 0; stderr=%q", args, code, stderr.String())
+			}
+			out := stdout.String()
+			if !strings.Contains(out, "usage: go-contactd serve [flags]") {
+				t.Fatalf("stdout missing serve usage: %q", out)
+			}
+			if !strings.Contains(out, "--listen-addr") || !strings.Contains(out, "--port") || !strings.Contains(out, "--db-path") {
+				t.Fatalf("stdout missing expected serve flags: %q", out)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
 func TestLogging_CLI_NoDaemonAccessLogs(t *testing.T) {
 	t.Parallel()
 

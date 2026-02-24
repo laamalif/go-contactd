@@ -147,15 +147,23 @@ func applyEnv(cfg *ServeConfig, env map[string]string) {
 func parseFlags(cfg *ServeConfig, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	var port int
 
 	fs.StringVar(&cfg.ListenAddr, "listen-addr", cfg.ListenAddr, "listen address")
+	fs.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr, "alias for --listen-addr")
+	fs.StringVar(&cfg.ListenAddr, "bind", cfg.ListenAddr, "alias for --listen-addr")
+	fs.StringVar(&cfg.ListenAddr, "addr", cfg.ListenAddr, "alias for --listen-addr")
 	fs.StringVar(&cfg.BaseURL, "base-url", cfg.BaseURL, "base URL for absolute redirects (optional)")
+	fs.StringVar(&cfg.BaseURL, "url", cfg.BaseURL, "alias for --base-url")
 	fs.StringVar(&cfg.DBPath, "db-path", cfg.DBPath, "sqlite database path")
+	fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "alias for --db-path")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level")
+	fs.StringVar(&cfg.LogLevel, "level", cfg.LogLevel, "alias for --log-level")
 	fs.StringVar(&cfg.LogFormat, "log-format", cfg.LogFormat, "log format (text|json)")
 	fs.Int64Var(&cfg.RequestMaxBytes, "request-max-bytes", cfg.RequestMaxBytes, "max request body bytes")
 	fs.Int64Var(&cfg.VCardMaxBytes, "vcard-max-bytes", cfg.VCardMaxBytes, "max persisted vCard bytes")
 	fs.BoolVar(&cfg.TrustProxyHeaders, "trust-proxy-headers", cfg.TrustProxyHeaders, "trust X-Forwarded-* headers")
+	fs.BoolVar(&cfg.TrustProxyHeaders, "trust-proxy", cfg.TrustProxyHeaders, "alias for --trust-proxy-headers")
 	fs.BoolVar(&cfg.ForceSeed, "force-seed", cfg.ForceSeed, "re-apply env seed even if DB has users")
 	fs.StringVar(&cfg.DefaultBookSlug, "default-book-slug", cfg.DefaultBookSlug, "default addressbook slug")
 	fs.StringVar(&cfg.DefaultBookName, "default-book-name", cfg.DefaultBookName, "default addressbook display name")
@@ -163,9 +171,29 @@ func parseFlags(cfg *ServeConfig, args []string) error {
 	fs.Int64Var(&cfg.ChangeRetentionMaxRevisions, "change-retention-max-revisions", cfg.ChangeRetentionMaxRevisions, "keep latest N revisions per addressbook (0 disables)")
 	fs.DurationVar(&cfg.PruneInterval, "prune-interval", cfg.PruneInterval, "background prune interval (0 disables)")
 	fs.BoolVar(&cfg.EnableAddressbookColor, "enable-addressbook-color", cfg.EnableAddressbookColor, "enable INF:addressbook-color PROPPATCH/PROPFIND support")
+	fs.IntVar(&port, "port", 0, "convenience: listen on :PORT (cannot combine with --listen-addr)")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse serve flags: %w", err)
+	}
+
+	var listenSet, portSet bool
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "listen-addr", "listen", "bind", "addr":
+			listenSet = true
+		case "port":
+			portSet = true
+		}
+	})
+	if portSet && listenSet {
+		return fmt.Errorf("cannot use --port together with --listen-addr (or its aliases)")
+	}
+	if portSet {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("--port must be between 1 and 65535")
+		}
+		cfg.ListenAddr = ":" + strconv.Itoa(port)
 	}
 	return nil
 }

@@ -155,6 +155,26 @@ func TestCLI_UserAdd_PasswordFlagsConflictRejected(t *testing.T) {
 	}
 }
 
+func TestCLI_UserList_DBAlias(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "contactd.sqlite")
+	env := map[string]string{}
+
+	code, _, stderr := runCLI(t, []string{"user", "add", "--db", dbPath, "--username", "alice", "--password", "pw1"}, env)
+	if code != 0 {
+		t.Fatalf("user add --db code = %d, want 0; stderr=%q", code, stderr)
+	}
+
+	code, stdout, stderr := runCLI(t, []string{"user", "list", "--db", dbPath, "--format", "json"}, env)
+	if code != 0 {
+		t.Fatalf("user list --db code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stdout, `"username":"alice"`) {
+		t.Fatalf("user list --db stdout = %q, want alice", stdout)
+	}
+}
+
 func runCLI(t *testing.T, args []string, env map[string]string) (code int, stdout string, stderr string) {
 	t.Helper()
 	return runCLIWithInput(t, args, env, "")
