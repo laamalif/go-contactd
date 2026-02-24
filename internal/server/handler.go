@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"log/slog"
@@ -63,6 +64,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == "PROPFIND" && h.opts.Backend != nil:
 		h.handlePropfind(w, r)
+		return
+	case r.Method == "REPORT" && h.opts.Backend != nil:
+		h.handleReport(w, r)
 		return
 	case h.opts.Backend != nil && isCardPath(r.URL.Path):
 		h.serveCardPath(w, r)
@@ -151,6 +155,73 @@ func (h *handler) handlePropfind(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, err := davxml.Marshal(ms)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.WriteHeader(http.StatusMultiStatus)
+	_, _ = w.Write(body)
+}
+
+func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
+	if classifyDAVPath(r.URL.Path) != davResourceAddressbook {
+		http.NotFound(w, r)
+		return
+	}
+
+	var envelope struct {
+		XMLName xml.Name
+		Hrefs   []string `xml:"href"`
+	}
+	if err := xml.NewDecoder(r.Body).Decode(&envelope); err != nil {
+		http.Error(w, "invalid xml", http.StatusBadRequest)
+		return
+	}
+
+	switch envelope.XMLName.Local {
+	case "addressbook-multiget":
+		h.handleAddressbookMultiGet(w, r, envelope.Hrefs)
+		return
+	default:
+		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
+		return
+	}
+}
+
+func (h *handler) handleAddressbookMultiGet(w http.ResponseWriter, r *http.Request, hrefs []string) {
+	responses := make([]davxml.Response, 0, len(hrefs))
+	for _, href := range hrefs {
+		ao, err := h.opts.Backend.GetAddressObject(r.Context(), href, nil)
+		if err != nil {
+			if status, ok := httpStatusFromError(err); ok && status == http.StatusNotFound {
+				responses = append(responses, davxml.Response{
+					Href:   href,
+					Status: davxml.StatusLine(http.StatusNotFound),
+				})
+				continue
+			}
+			writeBackendError(w, err)
+			return
+		}
+
+		var buf bytes.Buffer
+		if err := vcard.NewEncoder(&buf).Encode(ao.Card); err != nil {
+			http.Error(w, "invalid vcard", http.StatusInternalServerError)
+			return
+		}
+		responses = append(responses, davxml.Response{
+			Href: ao.Path,
+			PropStats: []davxml.PropStat{
+				davxml.PropStatOK(davxml.Prop{
+					GetETag:     ao.ETag,
+					AddressData: buf.String(),
+				}),
+			},
+		})
+	}
+
+	body, err := davxml.Marshal(davxml.MultiStatus{Responses: responses})
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

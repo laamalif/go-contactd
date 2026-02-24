@@ -312,6 +312,100 @@ func TestHandler_Propfind_DepthInfinityRejected(t *testing.T) {
 	}
 }
 
+func TestHandler_Report_UnknownTypeReturns501(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0"?>
+<D:sync-collection xmlns:D="DAV:"></D:sync-collection>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusNotImplemented; got != want {
+		t.Fatalf("REPORT unknown status = %d, want %d", got, want)
+	}
+}
+
+func TestHandler_Report_AddressbookMultiget_ReturnsSubsetAnd404(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject a: %v", err)
+	}
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/b.vcf", mustSampleCard("uid-b", "Alice B"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject b: %v", err)
+	}
+	h := newAuthedHandlerForTests(backend)
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:addressbook-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:prop>
+    <D:getetag/>
+    <C:address-data/>
+  </D:prop>
+  <D:href>/alice/contacts/b.vcf</D:href>
+  <D:href>/alice/contacts/missing.vcf</D:href>
+</C:addressbook-multiget>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("REPORT multiget status = %d, want %d", got, want)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/xml; charset=utf-8" {
+		t.Fatalf("REPORT multiget content-type = %q", ct)
+	}
+
+	type xmlResponse struct {
+		Href     string `xml:"href"`
+		Status   string `xml:"status"`
+		PropStat []struct {
+			Status string `xml:"status"`
+			Prop   struct {
+				GetETag     string `xml:"getetag"`
+				AddressData string `xml:"address-data"`
+			} `xml:"prop"`
+		} `xml:"propstat"`
+	}
+	var doc struct {
+		Responses []xmlResponse `xml:"response"`
+	}
+	if err := xml.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("xml.Unmarshal REPORT multiget: %v body=%q", err, rr.Body.String())
+	}
+	if len(doc.Responses) != 2 {
+		t.Fatalf("len(responses) = %d, want 2", len(doc.Responses))
+	}
+	if doc.Responses[0].Href != "/alice/contacts/b.vcf" {
+		t.Fatalf("response[0].href = %q, want /alice/contacts/b.vcf", doc.Responses[0].Href)
+	}
+	if len(doc.Responses[0].PropStat) == 0 || doc.Responses[0].PropStat[0].Prop.GetETag == "" {
+		t.Fatalf("response[0] missing getetag: %+v", doc.Responses[0])
+	}
+	if !strings.Contains(doc.Responses[0].PropStat[0].Prop.AddressData, "UID:uid-b") {
+		t.Fatalf("response[0] missing address-data payload: %+v", doc.Responses[0])
+	}
+	if doc.Responses[1].Href != "/alice/contacts/missing.vcf" {
+		t.Fatalf("response[1].href = %q, want /alice/contacts/missing.vcf", doc.Responses[1].Href)
+	}
+	if !strings.Contains(doc.Responses[1].Status, "404") {
+		t.Fatalf("response[1].status = %q, want 404", doc.Responses[1].Status)
+	}
+}
+
 func openServerBackend(t *testing.T) (*db.Store, *contactcarddav.Backend) {
 	t.Helper()
 	store, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "contactd.sqlite"))

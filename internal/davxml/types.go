@@ -44,6 +44,7 @@ type Prop struct {
 	AddressbookHomeSet   *Href         `xml:"urn:ietf:params:xml:ns:carddav addressbook-home-set,omitempty"`
 	ResourceType         *ResourceType `xml:"DAV: resourcetype,omitempty"`
 	GetETag              string        `xml:"DAV: getetag,omitempty"`
+	AddressData          string        `xml:"urn:ietf:params:xml:ns:carddav address-data,omitempty"`
 }
 
 type Error struct {
