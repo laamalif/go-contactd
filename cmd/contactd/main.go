@@ -105,6 +105,7 @@ func serveHTTPGracefully(runCtx context.Context, srv serveHTTPServer, logger *sl
 				return
 			default:
 			}
+			logger.Info("server shutdown", "event", "server shutdown")
 			ctx, cancel := context.WithTimeout(context.Background(), serveShutdownTimeout)
 			defer cancel()
 			shutdownErr = srv.Shutdown(ctx)
@@ -125,6 +126,7 @@ func serveHTTPGracefully(runCtx context.Context, srv serveHTTPServer, logger *sl
 		logger.Error("listen failed", "event", "listen failed", "error", err)
 		return 1
 	}
+	logger.Info("server stopped", "event", "server stopped")
 	return 0
 }
 

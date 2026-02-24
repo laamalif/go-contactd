@@ -213,6 +213,62 @@ func TestNewServeLogger_FormatAndLevel(t *testing.T) {
 	}
 }
 
+func TestServeHTTPGracefully_LogsShutdownAndStopped(t *testing.T) {
+	t.Parallel()
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var logs bytes.Buffer
+	listenResult := make(chan error, 1)
+	srv := &fakeServeServer{
+		listenAndServeFn: func() error { return <-listenResult },
+		shutdownFn: func(context.Context) error {
+			listenResult <- http.ErrServerClosed
+			return nil
+		},
+	}
+
+	done := make(chan int, 1)
+	go func() {
+		done <- serveHTTPGracefully(runCtx, srv, newServeLogger("text", "info", &logs))
+	}()
+	cancel()
+
+	select {
+	case got := <-done:
+		if got != 0 {
+			t.Fatalf("serveHTTPGracefully exit code = %d, want 0", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serveHTTPGracefully did not return")
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, "event=\"server shutdown\"") {
+		t.Fatalf("logs missing server shutdown event: %q", out)
+	}
+	if !strings.Contains(out, "event=\"server stopped\"") {
+		t.Fatalf("logs missing server stopped event: %q", out)
+	}
+}
+
+func TestRunMain_Version_NoDaemonAccessLogs(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := runMain([]string{"version"}, map[string]string{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runMain(version) code = %d, want 0", code)
+	}
+	if strings.Contains(stderr.String(), "event=") || strings.Contains(stderr.String(), "\"event\"") {
+		t.Fatalf("version command wrote daemon-style logs to stderr: %q", stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got == "" {
+		t.Fatalf("version command stdout empty")
+	}
+}
+
 func TestPrepareServeRuntime_SyncTokenContinuesAcrossRestart(t *testing.T) {
 	t.Parallel()
 

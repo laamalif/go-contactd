@@ -342,6 +342,100 @@ func TestHandler_CardPut_RejectsMissingOrUnsupportedContentType(t *testing.T) {
 	}
 }
 
+func TestHandler_CrossUserAccess_Returns404(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Alice Contacts")
+	seedServerUserBook(t, store, "bob", "contacts", "Bob Contacts")
+
+	bobBook, err := store.GetAddressbookByUsernameSlug(context.Background(), "bob", "contacts")
+	if err != nil {
+		t.Fatalf("GetAddressbookByUsernameSlug bob/contacts: %v", err)
+	}
+	if _, err := store.PutCard(context.Background(), db.PutCardInput{
+		AddressbookID: bobBook.ID,
+		Href:          "b.vcf",
+		UID:           "uid-bob",
+		VCard:         []byte(vcardBody("uid-bob", "Bob B")),
+	}); err != nil {
+		t.Fatalf("seed bob card: %v", err)
+	}
+
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	getReq := httptest.NewRequest(http.MethodGet, "/bob/contacts/b.vcf", nil)
+	getReq.SetBasicAuth("alice", "secret")
+	getRes := httptest.NewRecorder()
+	h.ServeHTTP(getRes, getReq)
+	if got, want := getRes.Code, http.StatusNotFound; got != want {
+		t.Fatalf("cross-user GET status = %d, want %d", got, want)
+	}
+
+	putReq := httptest.NewRequest(http.MethodPut, "/bob/contacts/new.vcf", bytes.NewBufferString(vcardBody("uid-new", "Nope")))
+	putReq.Header.Set("Content-Type", "text/vcard")
+	putReq.SetBasicAuth("alice", "secret")
+	putRes := httptest.NewRecorder()
+	h.ServeHTTP(putRes, putReq)
+	if got, want := putRes.Code, http.StatusNotFound; got != want {
+		t.Fatalf("cross-user PUT status = %d, want %d", got, want)
+	}
+}
+
+func TestHandler_CardRoundTripFidelity_PreservesUnicodeAndPhotoPayload(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+
+	h := newAuthedHandlerForTests(backend)
+	const photo = "AAECAwQFBgcICQ=="
+	body := strings.Join([]string{
+		"BEGIN:VCARD",
+		"VERSION:3.0",
+		"UID:uid-fidelity",
+		"FN:Zoë 🚀",
+		"PHOTO;ENCODING=b;TYPE=JPEG:" + photo,
+		"END:VCARD",
+		"",
+	}, "\r\n")
+
+	putReq := httptest.NewRequest(http.MethodPut, "/alice/contacts/fidelity.vcf", bytes.NewBufferString(body))
+	putReq.Header.Set("Content-Type", "text/vcard; charset=utf-8")
+	putReq.SetBasicAuth("alice", "secret")
+	putRes := httptest.NewRecorder()
+	h.ServeHTTP(putRes, putReq)
+	if got, want := putRes.Code, http.StatusCreated; got != want {
+		t.Fatalf("PUT status = %d, want %d body=%q", got, want, putRes.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/alice/contacts/fidelity.vcf", nil)
+	getReq.SetBasicAuth("alice", "secret")
+	getRes := httptest.NewRecorder()
+	h.ServeHTTP(getRes, getReq)
+	if got, want := getRes.Code, http.StatusOK; got != want {
+		t.Fatalf("GET status = %d, want %d", got, want)
+	}
+	gotBody := getRes.Body.String()
+	if !strings.Contains(gotBody, "FN:Zoë 🚀") {
+		t.Fatalf("GET body missing unicode FN: %q", gotBody)
+	}
+	if !strings.Contains(gotBody, photo) {
+		t.Fatalf("GET body missing photo payload: %q", gotBody)
+	}
+}
+
 func TestHandler_Mkcol_Create201_And_Existing405(t *testing.T) {
 	t.Parallel()
 
