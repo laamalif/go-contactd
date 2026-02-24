@@ -657,6 +657,12 @@ func (h *handler) handleSyncCollection(w http.ResponseWriter, r *http.Request, r
 			Status: davxml.StatusLine(http.StatusNotFound),
 		})
 	}
+	if res.Truncated {
+		ms.Responses = append(ms.Responses, davxml.Response{
+			Href:   r.URL.Path,
+			Status: davxml.StatusLine(http.StatusInsufficientStorage),
+		})
+	}
 	body, err := davxml.Marshal(ms)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

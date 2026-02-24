@@ -269,6 +269,35 @@ func TestRunMain_Version_NoDaemonAccessLogs(t *testing.T) {
 	}
 }
 
+func TestLogging_CLI_NoDaemonAccessLogs(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := runMain([]string{"version"}, map[string]string{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runMain(version) code = %d, want 0", code)
+	}
+	if strings.Contains(stderr.String(), "event=") || strings.Contains(stderr.String(), "\"event\"") {
+		t.Fatalf("version command wrote daemon-style logs to stderr: %q", stderr.String())
+	}
+}
+
+func TestLogging_Format_TextAndJSON(t *testing.T) {
+	t.Parallel()
+
+	var textBuf bytes.Buffer
+	newServeLogger("text", "info", &textBuf).Info("request", "event", "request")
+	if got := textBuf.String(); !strings.Contains(got, "event=request") {
+		t.Fatalf("text logger output missing structured field: %q", got)
+	}
+
+	var jsonBuf bytes.Buffer
+	newServeLogger("json", "info", &jsonBuf).Info("request", "event", "request")
+	if got := jsonBuf.String(); !strings.Contains(got, `"event":"request"`) {
+		t.Fatalf("json logger output missing json field: %q", got)
+	}
+}
+
 func TestServeHTTPGracefully_ListenFailureLogsEvent(t *testing.T) {
 	t.Parallel()
 

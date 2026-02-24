@@ -56,6 +56,22 @@ func TestHandler_WellKnownCardDAVRedirects(t *testing.T) {
 	}
 }
 
+func TestDavx_Discovery_WellKnownRedirect(t *testing.T) {
+	t.Parallel()
+
+	h := server.NewHandler(server.HandlerOptions{})
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/carddav", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusPermanentRedirect; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	if got, want := rr.Header().Get("Location"), "/"; got != want {
+		t.Fatalf("Location = %q, want %q", got, want)
+	}
+}
+
 func TestHandler_ProtectedRouteRejectsUnauthenticated(t *testing.T) {
 	t.Parallel()
 
@@ -308,6 +324,58 @@ func TestHandler_CardPutGetDelete_WithBackend(t *testing.T) {
 	h.ServeHTTP(getRes2, getReq2)
 	if got, want := getRes2.Code, http.StatusNotFound; got != want {
 		t.Fatalf("GET after delete status = %d, want %d", got, want)
+	}
+}
+
+func TestDavx_Options_AdvertisesDAV_1_3_Addressbook(t *testing.T) {
+	t.Parallel()
+
+	h := server.NewHandler(server.HandlerOptions{})
+	req := httptest.NewRequest(http.MethodOptions, "/alice/contacts/", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusNoContent; got != want {
+		t.Fatalf("OPTIONS status = %d, want %d", got, want)
+	}
+	if got := rr.Header().Get("DAV"); got != "1, 3, addressbook" {
+		t.Fatalf("DAV header = %q, want %q", got, "1, 3, addressbook")
+	}
+}
+
+func TestDavx_Read_GetCard_IncludesContentTypeETagContentLength(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	putReq := httptest.NewRequest(http.MethodPut, "/alice/contacts/g.vcf", bytes.NewBufferString(vcardBody("uid-g", "Getter")))
+	putReq.Header.Set("Content-Type", "text/vcard")
+	putReq.SetBasicAuth("alice", "secret")
+	putRes := httptest.NewRecorder()
+	h.ServeHTTP(putRes, putReq)
+	if got, want := putRes.Code, http.StatusCreated; got != want {
+		t.Fatalf("seed PUT status = %d, want %d", got, want)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/alice/contacts/g.vcf", nil)
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusOK; got != want {
+		t.Fatalf("GET status = %d, want %d", got, want)
+	}
+	if got := rr.Header().Get("Content-Type"); got != "text/vcard" {
+		t.Fatalf("Content-Type = %q, want text/vcard", got)
+	}
+	if got := rr.Header().Get("ETag"); got == "" {
+		t.Fatal("ETag header missing")
+	}
+	if got := rr.Header().Get("Content-Length"); got == "" || got == "0" {
+		t.Fatalf("Content-Length = %q, want non-empty/non-zero", got)
 	}
 }
 
@@ -2555,14 +2623,31 @@ func TestHandler_Report_SyncCollection_LimitUsesContinuationToken(t *testing.T) 
 		t.Fatalf("sync-collection limit status = %d, want %d", got, want)
 	}
 	var doc struct {
-		SyncToken string     `xml:"sync-token"`
-		Responses []struct{} `xml:"response"`
+		SyncToken string `xml:"sync-token"`
+		Responses []struct {
+			Href   string `xml:"href"`
+			Status string `xml:"status"`
+		} `xml:"response"`
 	}
 	if err := xml.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("xml.Unmarshal sync-collection limit: %v body=%q", err, rr.Body.String())
 	}
-	if len(doc.Responses) != 2 {
-		t.Fatalf("sync-collection limit responses = %d, want 2 body=%q", len(doc.Responses), rr.Body.String())
+	var (
+		itemCount int
+		has507    bool
+	)
+	for _, r := range doc.Responses {
+		if r.Href == "/alice/contacts/" && strings.Contains(r.Status, "507") {
+			has507 = true
+			continue
+		}
+		itemCount++
+	}
+	if itemCount != 2 {
+		t.Fatalf("sync-collection limit item responses = %d, want 2 body=%q", itemCount, rr.Body.String())
+	}
+	if !has507 {
+		t.Fatalf("sync-collection limit missing self 507 response body=%q", rr.Body.String())
 	}
 	gotTok, err := carddavx.ParseSyncToken(doc.SyncToken)
 	if err != nil {
@@ -2570,6 +2655,125 @@ func TestHandler_Report_SyncCollection_LimitUsesContinuationToken(t *testing.T) 
 	}
 	if gotTok.Revision != baseTok.Revision+2 {
 		t.Fatalf("sync-collection continuation token revision = %d, want %d body=%q", gotTok.Revision, baseTok.Revision+2, rr.Body.String())
+	}
+}
+
+func TestDavx_Sync_PaginationBoundary_500Then501(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	svc := carddavx.NewSyncService(store)
+
+	baseline, err := svc.SyncCollection(context.Background(), "alice", "contacts", "", 0)
+	if err != nil {
+		t.Fatalf("SyncCollection baseline: %v", err)
+	}
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), "alice", "contacts")
+	if err != nil {
+		t.Fatalf("GetAddressbookByUsernameSlug: %v", err)
+	}
+	for i := 0; i < 501; i++ {
+		uid := "uid-" + strconv.Itoa(i)
+		href := "c" + strconv.Itoa(i) + ".vcf"
+		if _, err := store.PutCard(context.Background(), db.PutCardInput{
+			AddressbookID: ab.ID,
+			Href:          href,
+			UID:           uid,
+			VCard:         []byte(vcardBody(uid, "Name "+strconv.Itoa(i))),
+		}); err != nil {
+			t.Fatalf("PutCard #%d: %v", i, err)
+		}
+	}
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            svc,
+	})
+
+	first := doSyncReportWithLimit(t, h, baseline.SyncToken, 500)
+	if got, want := first.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("first sync status = %d, want %d", got, want)
+	}
+	firstDoc := mustParseSyncMultiStatus(t, first.Body.Bytes())
+	if got, want := countNonSelfSyncResponses(firstDoc, "/alice/contacts/"), 500; got != want {
+		t.Fatalf("first sync item responses = %d, want %d", got, want)
+	}
+	if !hasSyncStatusForHref(firstDoc, "/alice/contacts/", http.StatusInsufficientStorage) {
+		t.Fatalf("first sync missing self 507 response body=%q", first.Body.String())
+	}
+	firstTok, err := carddavx.ParseSyncToken(firstDoc.SyncToken)
+	if err != nil {
+		t.Fatalf("ParseSyncToken first: %v token=%q", err, firstDoc.SyncToken)
+	}
+	if got, want := firstTok.Revision, int64(500); got != want {
+		t.Fatalf("first sync token revision = %d, want %d", got, want)
+	}
+
+	second := doSyncReportWithLimit(t, h, firstDoc.SyncToken, 500)
+	if got, want := second.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("second sync status = %d, want %d", got, want)
+	}
+	secondDoc := mustParseSyncMultiStatus(t, second.Body.Bytes())
+	if got, want := countNonSelfSyncResponses(secondDoc, "/alice/contacts/"), 1; got != want {
+		t.Fatalf("second sync item responses = %d, want %d body=%q", got, want, second.Body.String())
+	}
+	if hasSyncStatusForHref(secondDoc, "/alice/contacts/", http.StatusInsufficientStorage) {
+		t.Fatalf("second sync unexpectedly includes self 507 body=%q", second.Body.String())
+	}
+	secondTok, err := carddavx.ParseSyncToken(secondDoc.SyncToken)
+	if err != nil {
+		t.Fatalf("ParseSyncToken second: %v token=%q", err, secondDoc.SyncToken)
+	}
+	if got, want := secondTok.Revision, int64(501); got != want {
+		t.Fatalf("second sync token revision = %d, want %d", got, want)
+	}
+}
+
+func TestDavx_Sync_Pagination_TruncatedPageIncludes507SelfResponse(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	svc := carddavx.NewSyncService(store)
+
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), "alice", "contacts")
+	if err != nil {
+		t.Fatalf("GetAddressbookByUsernameSlug: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		uid := "uid-trunc-" + strconv.Itoa(i)
+		if _, err := store.PutCard(context.Background(), db.PutCardInput{
+			AddressbookID: ab.ID,
+			Href:          "t" + strconv.Itoa(i) + ".vcf",
+			UID:           uid,
+			VCard:         []byte(vcardBody(uid, "Trunc "+strconv.Itoa(i))),
+		}); err != nil {
+			t.Fatalf("PutCard #%d: %v", i, err)
+		}
+	}
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            svc,
+	})
+	rr := doSyncReportWithLimit(t, h, carddavx.FormatSyncToken(ab.ID, 0), 2)
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("sync status = %d, want %d", got, want)
+	}
+	doc := mustParseSyncMultiStatus(t, rr.Body.Bytes())
+	if !hasSyncStatusForHref(doc, "/alice/contacts/", http.StatusInsufficientStorage) {
+		t.Fatalf("truncated sync missing self 507 response body=%q", rr.Body.String())
 	}
 }
 
@@ -2859,4 +3063,58 @@ func mustExtractAddressbookExtensionProps(t *testing.T, body string) (syncToken,
 		t.Fatalf("missing getctag prop in body: %q", body)
 	}
 	return mTok[1], mCTag[1]
+}
+
+type syncMultiStatusDoc struct {
+	SyncToken string `xml:"sync-token"`
+	Responses []struct {
+		Href   string `xml:"href"`
+		Status string `xml:"status"`
+	} `xml:"response"`
+}
+
+func doSyncReportWithLimit(t *testing.T, h http.Handler, token string, limit int) *httptest.ResponseRecorder {
+	t.Helper()
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:sync-collection xmlns:D="DAV:">
+  <D:sync-token>` + token + `</D:sync-token>
+  <D:sync-level>1</D:sync-level>
+  <D:limit><D:nresults>` + strconv.Itoa(limit) + `</D:nresults></D:limit>
+</D:sync-collection>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
+}
+
+func mustParseSyncMultiStatus(t *testing.T, body []byte) syncMultiStatusDoc {
+	t.Helper()
+	var doc syncMultiStatusDoc
+	if err := xml.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("xml.Unmarshal sync multistatus: %v body=%q", err, string(body))
+	}
+	return doc
+}
+
+func hasSyncStatusForHref(doc syncMultiStatusDoc, href string, status int) bool {
+	want := "HTTP/1.1 " + strconv.Itoa(status) + " " + http.StatusText(status)
+	for _, r := range doc.Responses {
+		if r.Href == href && strings.TrimSpace(r.Status) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func countNonSelfSyncResponses(doc syncMultiStatusDoc, selfHref string) int {
+	n := 0
+	for _, r := range doc.Responses {
+		if r.Href == selfHref {
+			continue
+		}
+		n++
+	}
+	return n
 }

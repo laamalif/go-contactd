@@ -71,6 +71,7 @@ type SyncResult struct {
 	SyncToken string
 	Updated   []SyncRef
 	Deleted   []string
+	Truncated bool
 }
 
 type SyncService struct {
@@ -157,6 +158,7 @@ func (s *SyncService) SyncCollection(ctx context.Context, username, slug, rawTok
 		}
 	}
 	out := SyncResult{SyncToken: FormatSyncToken(ab.ID, tokenRevision)}
+	out.Truncated = tokenRevision < ab.Revision
 	for _, ch := range changes {
 		fullHref := "/" + username + "/" + slug + "/" + ch.Href
 		if ch.Deleted {
