@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -27,11 +28,15 @@ type HandlerOptions struct {
 	AttachPrincipal func(context.Context, string) context.Context
 	Backend         gocarddav.Backend
 	Sync            *carddavx.SyncService
+	RequestMaxBytes int64
 }
 
 func NewHandler(opts HandlerOptions) http.Handler {
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if opts.RequestMaxBytes <= 0 {
+		opts.RequestMaxBytes = 1 << 20 // 1 MiB
 	}
 	return &handler{opts: opts}
 }
@@ -149,8 +154,13 @@ func (h *handler) handlePropfind(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, h.opts.RequestMaxBytes)
 	reqSpec, err := parsePropfindRequest(r.Body)
 	if err != nil {
+		if isMaxBytesError(err) {
+			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "invalid xml", http.StatusBadRequest)
 		return
 	}
@@ -254,6 +264,7 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, h.opts.RequestMaxBytes)
 	var envelope struct {
 		XMLName   xml.Name
 		Hrefs     []string `xml:"href"`
@@ -263,6 +274,10 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 		} `xml:"limit"`
 	}
 	if err := xml.NewDecoder(r.Body).Decode(&envelope); err != nil {
+		if isMaxBytesError(err) {
+			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "invalid xml", http.StatusBadRequest)
 		return
 	}
@@ -697,8 +712,13 @@ func (h *handler) handleCardPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, h.opts.RequestMaxBytes)
 	card, err := vcard.NewDecoder(r.Body).Decode()
 	if err != nil {
+		if isMaxBytesError(err) {
+			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "invalid vcard", http.StatusBadRequest)
 		return
 	}
@@ -765,6 +785,11 @@ func parseAddressbookPath(p string) (user, slug string, ok bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
+}
+
+func isMaxBytesError(err error) bool {
+	var mbe *http.MaxBytesError
+	return errors.As(err, &mbe)
 }
 
 func isVCardContentType(v string) bool {

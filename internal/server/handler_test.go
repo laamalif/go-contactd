@@ -342,6 +342,36 @@ func TestHandler_CardPut_InvalidVCard_Returns400(t *testing.T) {
 	}
 }
 
+func TestHandler_CardPut_OversizeBodyReturns413(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend:         backend,
+		Sync:            carddavx.NewSyncService(store),
+		RequestMaxBytes: 16,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/a.vcf", bytes.NewBufferString(strings.Repeat("A", 64)))
+	req.Header.Set("Content-Type", "text/vcard")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusRequestEntityTooLarge; got != want {
+		t.Fatalf("PUT oversize status = %d, want %d", got, want)
+	}
+}
+
 func TestHandler_Propfind_PrincipalDepth0And1(t *testing.T) {
 	t.Parallel()
 
@@ -532,6 +562,38 @@ func TestHandler_Propfind_CardExplicitProps_UnknownReturns404Propstat(t *testing
 	}
 }
 
+func TestHandler_Propfind_OversizeBodyReturns413(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend:         backend,
+		Sync:            carddavx.NewSyncService(store),
+		RequestMaxBytes: 32,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	body := `<?xml version="1.0" encoding="utf-8"?><D:propfind xmlns:D="DAV:"><D:prop><D:getetag/></D:prop></D:propfind>`
+	req := httptest.NewRequest("PROPFIND", "/alice/contacts/a.vcf", bytes.NewBufferString(body))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusRequestEntityTooLarge; got != want {
+		t.Fatalf("PROPFIND oversize status = %d, want %d", got, want)
+	}
+}
+
 func TestHandler_Propfind_AddressbookExplicitExtensionProps(t *testing.T) {
 	t.Parallel()
 
@@ -671,6 +733,37 @@ func TestHandler_Report_UnknownTypeReturns501(t *testing.T) {
 
 	if got, want := rr.Code, http.StatusNotImplemented; got != want {
 		t.Fatalf("REPORT unknown status = %d, want %d", got, want)
+	}
+}
+
+func TestHandler_Report_OversizeBodyReturns413(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend:         backend,
+		Sync:            carddavx.NewSyncService(store),
+		RequestMaxBytes: 32,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	body := `<?xml version="1.0" encoding="utf-8"?><D:sync-collection xmlns:D="DAV:"><D:sync-token></D:sync-token><D:sync-level>1</D:sync-level></D:sync-collection>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(body))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusRequestEntityTooLarge; got != want {
+		t.Fatalf("REPORT oversize status = %d, want %d", got, want)
 	}
 }
 
