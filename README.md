@@ -78,6 +78,7 @@ Core runtime:
 | `CONTACTD_DB_PATH` | `--db-path` | `/data/contactd.sqlite` | Required in most deployments |
 | `CONTACTD_LISTEN_ADDR` | `--listen-addr` | `:8080` | Overrides `PORT` |
 | `PORT` | n/a | unset | Used only if `CONTACTD_LISTEN_ADDR` is unset |
+| `CONTACTD_BASE_URL` | `--base-url` | inferred/empty | Used for absolute redirects (e.g. `/.well-known/carddav`); DAV `href`s stay root-relative |
 | `CONTACTD_REQUEST_MAX_BYTES` | `--request-max-bytes` | `1048576` | XML/vCard request body limit |
 | `CONTACTD_VCARD_MAX_BYTES` | `--vcard-max-bytes` | `1048576` | Persisted vCard size cap; must be `<=` request max |
 
@@ -98,6 +99,7 @@ Bootstrap / maintenance:
 | `CONTACTD_DEFAULT_BOOK_NAME` | `--default-book-name` | `Contacts` | Seeded/default addressbook display name |
 | `CONTACTD_CHANGE_RETENTION_DAYS` | `--change-retention-days` | `180` | Startup journal prune by age (`0` disables age prune) |
 | `CONTACTD_CHANGE_RETENTION_MAX_REVISIONS` | `--change-retention-max-revisions` | `0` | Startup journal prune by latest N revisions (`0` disables) |
+| `CONTACTD_PRUNE_INTERVAL` | `--prune-interval` | `24h` | Background journal prune ticker interval (`0` disables ticker) |
 | `CONTACTD_ENABLE_ADDRESSBOOK_COLOR` | `--enable-addressbook-color` | `false` | Enables `INF:addressbook-color` PROPPATCH/PROPFIND support |
 
 User seed (bootstrap-only):

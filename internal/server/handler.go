@@ -33,6 +33,7 @@ type HandlerOptions struct {
 	Sync                   *carddavx.SyncService
 	EnableAddressbookColor bool
 	TrustProxyHeaders      bool
+	BaseURL                string
 	RequestMaxBytes        int64
 	VCardMaxBytes          int64
 }
@@ -103,7 +104,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *handler) serveHTTP(w http.ResponseWriter, r *http.Request) *http.Request {
 	switch r.URL.Path {
 	case "/.well-known/carddav":
-		http.Redirect(w, r, "/", http.StatusPermanentRedirect)
+		http.Redirect(w, r, h.wellKnownRedirectTarget(), http.StatusPermanentRedirect)
 		return r
 	case "/healthz":
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -155,6 +156,13 @@ func (h *handler) serveHTTP(w http.ResponseWriter, r *http.Request) *http.Reques
 		http.NotFound(w, r)
 		return r
 	}
+}
+
+func (h *handler) wellKnownRedirectTarget() string {
+	if strings.TrimSpace(h.opts.BaseURL) == "" {
+		return "/"
+	}
+	return strings.TrimRight(strings.TrimSpace(h.opts.BaseURL), "/") + "/"
 }
 
 func isPublicPath(p string) bool {

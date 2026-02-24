@@ -113,6 +113,7 @@ func runServe(args []string, env map[string]string, stderr io.Writer) int {
 		"log_level", rt.cfg.LogLevel,
 		"log_format", rt.cfg.LogFormat,
 		"trust_proxy_headers", rt.cfg.TrustProxyHeaders,
+		"base_url", rt.cfg.BaseURL,
 	)
 
 	srv := &http.Server{
@@ -121,6 +122,8 @@ func runServe(args []string, env map[string]string, stderr io.Writer) int {
 	}
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	stopPrune := startConfiguredPruneLoop(sigCtx, rt.store, rt.cfg, rt.logger)
+	defer stopPrune()
 	return serveHTTPGracefully(sigCtx, srv, rt.logger)
 }
 
@@ -499,6 +502,7 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 		Backend:                contactcarddav.NewBackend(store),
 		Sync:                   carddavx.NewSyncService(store),
 		EnableAddressbookColor: cfg.EnableAddressbookColor,
+		BaseURL:                cfg.BaseURL,
 		TrustProxyHeaders:      cfg.TrustProxyHeaders,
 		RequestMaxBytes:        cfg.RequestMaxBytes,
 		VCardMaxBytes:          cfg.VCardMaxBytes,
@@ -558,25 +562,9 @@ func startupStore(ctx context.Context, store *db.Store, cfg config.ServeConfig, 
 		}
 	}
 
-	var prunedAge int64
-	if cfg.ChangeRetentionDays > 0 {
-		cutoff := time.Now().AddDate(0, 0, -cfg.ChangeRetentionDays)
-		n, err := store.PruneCardChangesByAge(ctx, cutoff)
-		if err != nil {
-			return fmt.Errorf("startup prune by age: %w", err)
-		}
-		prunedAge = n
+	if err := pruneOnce(ctx, store, cfg, logger, "startup"); err != nil {
+		return err
 	}
-
-	var prunedMax int64
-	if cfg.ChangeRetentionMaxRevisions > 0 {
-		n, err := store.PruneCardChangesByMaxRevisions(ctx, cfg.ChangeRetentionMaxRevisions)
-		if err != nil {
-			return fmt.Errorf("startup prune by max revisions: %w", err)
-		}
-		prunedMax = n
-	}
-	logger.Info("changes pruned", "event", "changes pruned", "by_age", prunedAge, "by_max_revisions", prunedMax)
 
 	userCount, err := store.UserCount(ctx)
 	if err != nil {
@@ -593,6 +581,76 @@ func startupStore(ctx context.Context, store *db.Store, cfg config.ServeConfig, 
 		logger.Info("user seeded", "event", "user seeded", "user", seed.Username)
 	}
 	return nil
+}
+
+func pruneOnce(ctx context.Context, store *db.Store, cfg config.ServeConfig, logger *slog.Logger, source string) error {
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	var prunedAge int64
+	if cfg.ChangeRetentionDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -cfg.ChangeRetentionDays)
+		n, err := store.PruneCardChangesByAge(ctx, cutoff)
+		if err != nil {
+			return fmt.Errorf("%s prune by age: %w", source, err)
+		}
+		prunedAge = n
+	}
+
+	var prunedMax int64
+	if cfg.ChangeRetentionMaxRevisions > 0 {
+		n, err := store.PruneCardChangesByMaxRevisions(ctx, cfg.ChangeRetentionMaxRevisions)
+		if err != nil {
+			return fmt.Errorf("%s prune by max revisions: %w", source, err)
+		}
+		prunedMax = n
+	}
+
+	logger.Info("changes pruned", "event", "changes pruned", "source", source, "by_age", prunedAge, "by_max_revisions", prunedMax)
+	return nil
+}
+
+func startConfiguredPruneLoop(ctx context.Context, store *db.Store, cfg config.ServeConfig, logger *slog.Logger) func() {
+	if store == nil {
+		return func() {}
+	}
+	return startBackgroundPruneLoop(ctx, cfg.PruneInterval, logger, func(loopCtx context.Context) error {
+		pruneCtx, cancel := context.WithTimeout(loopCtx, 30*time.Second)
+		defer cancel()
+		if err := pruneOnce(pruneCtx, store, cfg, logger, "ticker"); err != nil {
+			if logger != nil {
+				logger.Error("db error", "event", "db error", "op", "prune_ticker", "error", err)
+			}
+			return err
+		}
+		return nil
+	})
+}
+
+func startBackgroundPruneLoop(ctx context.Context, interval time.Duration, _ *slog.Logger, fn func(context.Context) error) func() {
+	if interval <= 0 || fn == nil {
+		return func() {}
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	ticker := time.NewTicker(interval)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-ticker.C:
+				_ = fn(runCtx)
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 func seedUser(ctx context.Context, store *db.Store, cfg config.ServeConfig, seed config.SeedUser, force bool) error {

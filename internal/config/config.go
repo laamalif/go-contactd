@@ -4,9 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -19,6 +21,7 @@ const (
 	defaultBookSlug        = "contacts"
 	defaultBookName        = "Contacts"
 	defaultRetentionDays   = 180
+	defaultPruneInterval   = 24 * time.Hour
 )
 
 type SeedUser struct {
@@ -28,6 +31,7 @@ type SeedUser struct {
 
 type ServeConfig struct {
 	ListenAddr                  string
+	BaseURL                     string
 	DBPath                      string
 	LogLevel                    string
 	LogFormat                   string
@@ -39,6 +43,7 @@ type ServeConfig struct {
 	DefaultBookName             string
 	ChangeRetentionDays         int
 	ChangeRetentionMaxRevisions int64
+	PruneInterval               time.Duration
 	EnableAddressbookColor      bool
 	Users                       []SeedUser
 }
@@ -54,6 +59,7 @@ func LoadServeConfig(args []string, env map[string]string) (ServeConfig, error) 
 		DefaultBookSlug:     defaultBookSlug,
 		DefaultBookName:     defaultBookName,
 		ChangeRetentionDays: defaultRetentionDays,
+		PruneInterval:       defaultPruneInterval,
 	}
 
 	applyEnv(&cfg, env)
@@ -80,6 +86,9 @@ func applyEnv(cfg *ServeConfig, env map[string]string) {
 
 	if v, ok := env["CONTACTD_DB_PATH"]; ok && strings.TrimSpace(v) != "" {
 		cfg.DBPath = v
+	}
+	if v, ok := env["CONTACTD_BASE_URL"]; ok && strings.TrimSpace(v) != "" {
+		cfg.BaseURL = strings.TrimSpace(v)
 	}
 	if v, ok := env["CONTACTD_LOG_LEVEL"]; ok && strings.TrimSpace(v) != "" {
 		cfg.LogLevel = v
@@ -123,6 +132,11 @@ func applyEnv(cfg *ServeConfig, env map[string]string) {
 			cfg.ChangeRetentionMaxRevisions = n
 		}
 	}
+	if v, ok := env["CONTACTD_PRUNE_INTERVAL"]; ok && strings.TrimSpace(v) != "" {
+		if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil {
+			cfg.PruneInterval = d
+		}
+	}
 	if v, ok := env["CONTACTD_ENABLE_ADDRESSBOOK_COLOR"]; ok && strings.TrimSpace(v) != "" {
 		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
 			cfg.EnableAddressbookColor = b
@@ -135,6 +149,7 @@ func parseFlags(cfg *ServeConfig, args []string) error {
 	fs.SetOutput(io.Discard)
 
 	fs.StringVar(&cfg.ListenAddr, "listen-addr", cfg.ListenAddr, "listen address")
+	fs.StringVar(&cfg.BaseURL, "base-url", cfg.BaseURL, "base URL for absolute redirects (optional)")
 	fs.StringVar(&cfg.DBPath, "db-path", cfg.DBPath, "sqlite database path")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level")
 	fs.StringVar(&cfg.LogFormat, "log-format", cfg.LogFormat, "log format (text|json)")
@@ -146,6 +161,7 @@ func parseFlags(cfg *ServeConfig, args []string) error {
 	fs.StringVar(&cfg.DefaultBookName, "default-book-name", cfg.DefaultBookName, "default addressbook display name")
 	fs.IntVar(&cfg.ChangeRetentionDays, "change-retention-days", cfg.ChangeRetentionDays, "retain card_changes for this many days")
 	fs.Int64Var(&cfg.ChangeRetentionMaxRevisions, "change-retention-max-revisions", cfg.ChangeRetentionMaxRevisions, "keep latest N revisions per addressbook (0 disables)")
+	fs.DurationVar(&cfg.PruneInterval, "prune-interval", cfg.PruneInterval, "background prune interval (0 disables)")
 	fs.BoolVar(&cfg.EnableAddressbookColor, "enable-addressbook-color", cfg.EnableAddressbookColor, "enable INF:addressbook-color PROPPATCH/PROPFIND support")
 
 	if err := fs.Parse(args); err != nil {
@@ -160,6 +176,12 @@ func validateServeConfig(cfg ServeConfig) error {
 	}
 	if cfg.DBPath == "" {
 		return fmt.Errorf("db path is empty")
+	}
+	if strings.TrimSpace(cfg.BaseURL) != "" {
+		u, err := url.Parse(strings.TrimSpace(cfg.BaseURL))
+		if err != nil || !u.IsAbs() || strings.TrimSpace(u.Host) == "" {
+			return fmt.Errorf("invalid base url %q", cfg.BaseURL)
+		}
 	}
 	switch cfg.LogFormat {
 	case "text", "json":
@@ -191,6 +213,9 @@ func validateServeConfig(cfg ServeConfig) error {
 	}
 	if cfg.ChangeRetentionMaxRevisions < 0 {
 		return fmt.Errorf("change retention max revisions must be >= 0")
+	}
+	if cfg.PruneInterval < 0 {
+		return fmt.Errorf("prune interval must be >= 0")
 	}
 
 	return nil

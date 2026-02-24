@@ -11,9 +11,12 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/laamalif/go-contactd/internal/config"
+	"github.com/laamalif/go-contactd/internal/db"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -381,6 +384,94 @@ func TestPrepareServeRuntime_LogsDBErrorOnOpenFailure(t *testing.T) {
 	}
 	if got := logs.String(); !strings.Contains(got, "event=\"db error\"") {
 		t.Fatalf("logs missing db error event: %q", got)
+	}
+}
+
+func TestStartBackgroundPruneLoop_DisabledWhenIntervalZero(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	stop := startBackgroundPruneLoop(context.Background(), 0, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), func(context.Context) error {
+		calls.Add(1)
+		return nil
+	})
+	defer stop()
+
+	time.Sleep(20 * time.Millisecond)
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("prune loop calls = %d, want 0", got)
+	}
+}
+
+func TestStartBackgroundPruneLoop_RunsOnTicker(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stop := startBackgroundPruneLoop(ctx, 10*time.Millisecond, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), func(context.Context) error {
+		calls.Add(1)
+		return nil
+	})
+	defer stop()
+
+	deadline := time.After(300 * time.Millisecond)
+	for calls.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("background prune loop did not run")
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+}
+
+func TestPruneOnce_AppliesRetentionConfig(t *testing.T) {
+	t.Parallel()
+
+	store, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "prune.sqlite"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	userID, err := store.CreateUser(context.Background(), "alice", "bcrypt")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	bookID, err := store.CreateAddressbook(context.Background(), userID, "contacts", "Contacts")
+	if err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+	if _, err := store.PutCard(context.Background(), db.PutCardInput{
+		AddressbookID: bookID,
+		Href:          "a.vcf",
+		UID:           "uid-a",
+		VCard:         []byte("BEGIN:VCARD\nVERSION:3.0\nUID:uid-a\nFN:A\nEND:VCARD\n"),
+	}); err != nil {
+		t.Fatalf("PutCard: %v", err)
+	}
+	if err := store.ForceCardChangesTimestamp(context.Background(), bookID, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ForceCardChangesTimestamp: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	cfg := config.ServeConfig{
+		ChangeRetentionDays:         1,
+		ChangeRetentionMaxRevisions: 0,
+	}
+	if err := pruneOnce(context.Background(), store, cfg, slog.New(slog.NewTextHandler(&logBuf, nil)), "ticker"); err != nil {
+		t.Fatalf("pruneOnce: %v", err)
+	}
+	count, err := store.CardChangeCount(context.Background(), bookID)
+	if err != nil {
+		t.Fatalf("CardChangeCount: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("CardChangeCount after prune = %d, want 0", count)
+	}
+	if got := logBuf.String(); !strings.Contains(got, "event=\"changes pruned\"") {
+		t.Fatalf("pruneOnce log missing changes pruned event: %q", got)
 	}
 }
 

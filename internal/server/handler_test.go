@@ -72,6 +72,22 @@ func TestDavx_Discovery_WellKnownRedirect(t *testing.T) {
 	}
 }
 
+func TestHandler_WellKnownCardDAVRedirect_UsesBaseURLWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	h := server.NewHandler(server.HandlerOptions{BaseURL: "https://dav.example.com/prefix"})
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/carddav", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusPermanentRedirect; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	if got, want := rr.Header().Get("Location"), "https://dav.example.com/prefix/"; got != want {
+		t.Fatalf("Location = %q, want %q", got, want)
+	}
+}
+
 func TestHandler_ProtectedRouteRejectsUnauthenticated(t *testing.T) {
 	t.Parallel()
 

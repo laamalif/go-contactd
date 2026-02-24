@@ -101,3 +101,32 @@ func TestLoadServeConfig_InvalidLogLevelRejected(t *testing.T) {
 		t.Fatalf("error = %q, want invalid log level", got)
 	}
 }
+
+func TestLoadServeConfig_BaseURLAndPruneInterval_ParseAndPriority(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.LoadServeConfig([]string{"--base-url", "https://flag.example/pfx", "--prune-interval", "12h"}, map[string]string{
+		"CONTACTD_BASE_URL":       "https://env.example/base",
+		"CONTACTD_PRUNE_INTERVAL": "48h",
+	})
+	if err != nil {
+		t.Fatalf("LoadServeConfig returned error: %v", err)
+	}
+	if got, want := cfg.BaseURL, "https://flag.example/pfx"; got != want {
+		t.Fatalf("BaseURL = %q, want %q", got, want)
+	}
+	if got, want := cfg.PruneInterval.String(), "12h0m0s"; got != want {
+		t.Fatalf("PruneInterval = %q, want %q", got, want)
+	}
+}
+
+func TestLoadServeConfig_InvalidBaseURLAndPruneIntervalRejected(t *testing.T) {
+	t.Parallel()
+
+	if _, err := config.LoadServeConfig(nil, map[string]string{"CONTACTD_BASE_URL": "/relative"}); err == nil {
+		t.Fatal("LoadServeConfig invalid base url error=nil, want error")
+	}
+	if _, err := config.LoadServeConfig(nil, map[string]string{"CONTACTD_PRUNE_INTERVAL": "-1s"}); err == nil {
+		t.Fatal("LoadServeConfig invalid prune interval error=nil, want error")
+	}
+}
