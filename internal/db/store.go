@@ -480,6 +480,40 @@ func (s *Store) CardChangeRevisions(ctx context.Context, addressbookID int64) ([
 	return revs, nil
 }
 
+func (s *Store) ListCardChangesSince(ctx context.Context, addressbookID int64, afterRevision int64, limit int) ([]CardChange, error) {
+	query := `
+		SELECT href, COALESCE(etag, ''), deleted, revision
+		FROM card_changes
+		WHERE addressbook_id = ? AND revision > ?
+		ORDER BY revision ASC, id ASC
+	`
+	args := []any{addressbookID, afterRevision}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list card_changes since: %w", err)
+	}
+	defer rows.Close()
+
+	var out []CardChange
+	for rows.Next() {
+		var c CardChange
+		var deleted int
+		if err := rows.Scan(&c.Href, &c.ETagHex, &deleted, &c.Revision); err != nil {
+			return nil, fmt.Errorf("scan card_change row: %w", err)
+		}
+		c.Deleted = deleted != 0
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate card_changes since: %w", err)
+	}
+	return out, nil
+}
+
 func (s *Store) PutCard(ctx context.Context, in PutCardInput) (PutCardResult, error) {
 	if in.AddressbookID == 0 {
 		return PutCardResult{}, fmt.Errorf("addressbook_id is required")

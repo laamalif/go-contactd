@@ -16,6 +16,7 @@ import (
 	"github.com/emersion/go-vcard"
 	webdav "github.com/emersion/go-webdav"
 	gocarddav "github.com/emersion/go-webdav/carddav"
+	"github.com/laamalif/go-contactd/internal/carddavx"
 	"github.com/laamalif/go-contactd/internal/davxml"
 )
 
@@ -25,6 +26,7 @@ type HandlerOptions struct {
 	Authenticate    func(context.Context, string, string) (string, bool, error)
 	AttachPrincipal func(context.Context, string) context.Context
 	Backend         gocarddav.Backend
+	Sync            *carddavx.SyncService
 }
 
 func NewHandler(opts HandlerOptions) http.Handler {
@@ -253,8 +255,9 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var envelope struct {
-		XMLName xml.Name
-		Hrefs   []string `xml:"href"`
+		XMLName   xml.Name
+		Hrefs     []string `xml:"href"`
+		SyncToken string   `xml:"sync-token"`
 	}
 	if err := xml.NewDecoder(r.Body).Decode(&envelope); err != nil {
 		http.Error(w, "invalid xml", http.StatusBadRequest)
@@ -268,10 +271,65 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 	case "addressbook-query":
 		h.handleAddressbookQuery(w, r)
 		return
+	case "sync-collection":
+		h.handleSyncCollection(w, r, envelope.SyncToken)
+		return
 	default:
 		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
 		return
 	}
+}
+
+func (h *handler) handleSyncCollection(w http.ResponseWriter, r *http.Request, rawToken string) {
+	if h.opts.Sync == nil {
+		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
+		return
+	}
+	user, slug, ok := parseAddressbookPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	res, err := h.opts.Sync.SyncCollection(r.Context(), user, slug, strings.TrimSpace(rawToken), 0)
+	if err != nil {
+		if carddavx.IsInvalidSyncToken(err) {
+			body, mErr := davxml.Marshal(davxml.Error{ValidSyncToken: &struct{}{}})
+			if mErr != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write(body)
+			return
+		}
+		writeBackendError(w, err)
+		return
+	}
+
+	ms := davxml.MultiStatus{SyncToken: res.SyncToken}
+	for _, u := range res.Updated {
+		ms.Responses = append(ms.Responses, davxml.Response{
+			Href: u.Href,
+			PropStats: []davxml.PropStat{
+				davxml.PropStatOK(davxml.Prop{GetETag: u.ETag}),
+			},
+		})
+	}
+	for _, d := range res.Deleted {
+		ms.Responses = append(ms.Responses, davxml.Response{
+			Href:   d,
+			Status: davxml.StatusLine(http.StatusNotFound),
+		})
+	}
+	body, err := davxml.Marshal(ms)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.WriteHeader(http.StatusMultiStatus)
+	_, _ = w.Write(body)
 }
 
 func (h *handler) handleAddressbookMultiGet(w http.ResponseWriter, r *http.Request, hrefs []string) {
@@ -624,6 +682,18 @@ func isCardPath(p string) bool {
 	clean := path.Clean("/" + strings.TrimSpace(p))
 	parts := strings.Split(strings.Trim(clean, "/"), "/")
 	return len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] != ""
+}
+
+func parseAddressbookPath(p string) (user, slug string, ok bool) {
+	clean := path.Clean("/" + strings.TrimSpace(p))
+	parts := strings.Split(strings.Trim(clean, "/"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	if !strings.HasSuffix(p, "/") {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 func isVCardContentType(v string) bool {

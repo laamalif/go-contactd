@@ -13,6 +13,7 @@ import (
 	"github.com/emersion/go-vcard"
 	gocarddav "github.com/emersion/go-webdav/carddav"
 	contactcarddav "github.com/laamalif/go-contactd/internal/carddav"
+	"github.com/laamalif/go-contactd/internal/carddavx"
 	"github.com/laamalif/go-contactd/internal/db"
 	"github.com/laamalif/go-contactd/internal/server"
 )
@@ -209,7 +210,17 @@ func TestHandler_CardDelete_IfMatchEnforced(t *testing.T) {
 	store, backend := openServerBackend(t)
 	defer store.Close()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
-	h := newAuthedHandlerForTests(backend)
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
 
 	putReq := httptest.NewRequest(http.MethodPut, "/alice/contacts/a.vcf", bytes.NewBufferString(vcardBody("uid-a", "Alice A")))
 	putReq.Header.Set("Content-Type", "text/vcard")
@@ -257,7 +268,17 @@ func TestHandler_CardPut_UIDConflict_ReturnsCardDAVPreconditionXML(t *testing.T)
 	store, backend := openServerBackend(t)
 	defer store.Close()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
-	h := newAuthedHandlerForTests(backend)
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
 
 	putA := httptest.NewRequest(http.MethodPut, "/alice/contacts/a.vcf", bytes.NewBufferString(vcardBody("same-uid", "Alice A")))
 	putA.Header.Set("Content-Type", "text/vcard")
@@ -295,7 +316,17 @@ func TestHandler_CardPut_InvalidVCard_Returns400(t *testing.T) {
 	store, backend := openServerBackend(t)
 	defer store.Close()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
-	h := newAuthedHandlerForTests(backend)
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
 
 	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/a.vcf", bytes.NewBufferString("not-a-vcard"))
 	req.Header.Set("Content-Type", "text/vcard")
@@ -317,7 +348,17 @@ func TestHandler_Propfind_PrincipalDepth0And1(t *testing.T) {
 	if _, err := backend.PutAddressObject(contactcarddav.WithPrincipal(context.Background(), "alice"), "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
 		t.Fatalf("seed PutAddressObject: %v", err)
 	}
-	h := newAuthedHandlerForTests(backend)
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
 
 	res0 := doPropfind(t, h, "/alice/", "0")
 	if got, want := res0.Code, http.StatusMultiStatus; got != want {
@@ -361,7 +402,17 @@ func TestHandler_Propfind_AddressbookAndCardDepthHandling(t *testing.T) {
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/b.vcf", mustSampleCard("uid-b", "Alice B"), &gocarddav.PutAddressObjectOptions{}); err != nil {
 		t.Fatalf("seed PutAddressObject: %v", err)
 	}
-	h := newAuthedHandlerForTests(backend)
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
 
 	ab0 := doPropfind(t, h, "/alice/contacts/", "0")
 	if got, want := ab0.Code, http.StatusMultiStatus; got != want {
@@ -409,7 +460,17 @@ func TestHandler_Propfind_DepthInfinityRejected(t *testing.T) {
 	store, backend := openServerBackend(t)
 	defer store.Close()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
-	h := newAuthedHandlerForTests(backend)
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
 
 	rr := doPropfind(t, h, "/alice/contacts/", "infinity")
 	if got, want := rr.Code, http.StatusForbidden; got != want {
@@ -427,7 +488,17 @@ func TestHandler_Propfind_CardExplicitProps_UnknownReturns404Propstat(t *testing
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
 		t.Fatalf("seed PutAddressObject: %v", err)
 	}
-	h := newAuthedHandlerForTests(backend)
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
 
 	req := httptest.NewRequest("PROPFIND", "/alice/contacts/a.vcf", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
 <D:propfind xmlns:D="DAV:">
@@ -464,10 +535,20 @@ func TestHandler_Report_UnknownTypeReturns501(t *testing.T) {
 	store, backend := openServerBackend(t)
 	defer store.Close()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
-	h := newAuthedHandlerForTests(backend)
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
 
 	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0"?>
-<D:sync-collection xmlns:D="DAV:"></D:sync-collection>`))
+<X:unknown-report xmlns:X="urn:example"></X:unknown-report>`))
 	req.SetBasicAuth("alice", "secret")
 	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
 	rr := httptest.NewRecorder()
@@ -491,7 +572,14 @@ func TestHandler_Report_AddressbookMultiget_ReturnsSubsetAnd404(t *testing.T) {
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/b.vcf", mustSampleCard("uid-b", "Alice B"), &gocarddav.PutAddressObjectOptions{}); err != nil {
 		t.Fatalf("seed PutAddressObject b: %v", err)
 	}
-	h := newAuthedHandlerForTests(backend)
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
 
 	reqBody := `<?xml version="1.0" encoding="utf-8"?>
 <C:addressbook-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
@@ -565,7 +653,14 @@ func TestHandler_Report_AddressbookQuery_ReturnsCardsWithAddressData(t *testing.
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/b.vcf", mustSampleCard("uid-b", "Alice B"), &gocarddav.PutAddressObjectOptions{}); err != nil {
 		t.Fatalf("seed PutAddressObject b: %v", err)
 	}
-	h := newAuthedHandlerForTests(backend)
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
 
 	reqBody := `<?xml version="1.0" encoding="utf-8"?>
 <C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
@@ -613,6 +708,92 @@ func TestHandler_Report_AddressbookQuery_ReturnsCardsWithAddressData(t *testing.
 		if !strings.Contains(resp.PropStat[0].Prop.AddressData, "BEGIN:VCARD") {
 			t.Fatalf("response[%d] missing address-data: %+v", i, resp)
 		}
+	}
+}
+
+func TestHandler_Report_SyncCollection_EmptyTokenReturnsSyncTokenAndItems(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject: %v", err)
+	}
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:sync-collection xmlns:D="DAV:">
+  <D:sync-token></D:sync-token>
+  <D:sync-level>1</D:sync-level>
+</D:sync-collection>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("sync-collection empty token status = %d, want %d", got, want)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/xml; charset=utf-8" {
+		t.Fatalf("sync-collection content-type = %q", ct)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "sync-token") || !strings.Contains(body, "urn:contactd:sync:") {
+		t.Fatalf("sync-collection body missing sync-token: %q", body)
+	}
+	if !strings.Contains(body, "/alice/contacts/a.vcf") || !strings.Contains(body, "getetag") {
+		t.Fatalf("sync-collection body missing item response: %q", body)
+	}
+}
+
+func TestHandler_Report_SyncCollection_InvalidTokenReturns403ValidSyncTokenError(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:sync-collection xmlns:D="DAV:">
+  <D:sync-token>urn:contactd:sync:999:1</D:sync-token>
+  <D:sync-level>1</D:sync-level>
+</D:sync-collection>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusForbidden; got != want {
+		t.Fatalf("sync-collection invalid token status = %d, want %d", got, want)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/xml; charset=utf-8" {
+		t.Fatalf("sync-collection invalid token content-type = %q", ct)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "valid-sync-token") {
+		t.Fatalf("sync-collection invalid token body missing valid-sync-token: %q", body)
+	}
+	if strings.Contains(body, "<sync-token") {
+		t.Fatalf("sync-collection invalid token body must not include sync-token: %q", body)
 	}
 }
 

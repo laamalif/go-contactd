@@ -1,0 +1,104 @@
+package carddavx_test
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"github.com/emersion/go-vcard"
+	"github.com/emersion/go-webdav/carddav"
+	contactcarddav "github.com/laamalif/go-contactd/internal/carddav"
+	"github.com/laamalif/go-contactd/internal/carddavx"
+	"github.com/laamalif/go-contactd/internal/db"
+)
+
+func TestSyncToken_FormatParseRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	token := carddavx.FormatSyncToken(42, 105)
+	if token != "urn:contactd:sync:42:105" {
+		t.Fatalf("FormatSyncToken = %q", token)
+	}
+
+	parsed, err := carddavx.ParseSyncToken(token)
+	if err != nil {
+		t.Fatalf("ParseSyncToken: %v", err)
+	}
+	if parsed.AddressbookID != 42 || parsed.Revision != 105 {
+		t.Fatalf("ParseSyncToken parsed = %+v", parsed)
+	}
+}
+
+func TestSyncToken_ParseRejectsInvalid(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []string{
+		"",
+		"urn:contactd:sync",
+		"urn:contactd:sync:x:1",
+		"urn:contactd:sync:1:x",
+		"urn:contactd:sync:1",
+		"urn:other:sync:1:2",
+	} {
+		if _, err := carddavx.ParseSyncToken(tc); err == nil {
+			t.Fatalf("ParseSyncToken(%q) error=nil, want error", tc)
+		}
+	}
+}
+
+func TestService_SyncCollection_EmptyTokenInitialSyncAndInvalidToken(t *testing.T) {
+	t.Parallel()
+
+	store := openSyncStore(t)
+	defer store.Close()
+	userID, err := store.CreateUser(context.Background(), "alice", "hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := store.CreateAddressbook(context.Background(), userID, "contacts", "Contacts"); err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+	backend := contactcarddav.NewBackend(store)
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", sampleCard("uid-a", "Alice A"), &carddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject: %v", err)
+	}
+
+	svc := carddavx.NewSyncService(store)
+
+	res, err := svc.SyncCollection(context.Background(), "alice", "contacts", "", 0)
+	if err != nil {
+		t.Fatalf("SyncCollection empty token: %v", err)
+	}
+	if res.SyncToken == "" {
+		t.Fatal("SyncCollection empty token result missing sync token")
+	}
+	if len(res.Updated) != 1 || res.Updated[0].Href != "/alice/contacts/a.vcf" {
+		t.Fatalf("initial sync updated = %+v, want one /alice/contacts/a.vcf", res.Updated)
+	}
+
+	_, err = svc.SyncCollection(context.Background(), "alice", "contacts", "urn:contactd:sync:999:1", 0)
+	if err == nil {
+		t.Fatal("SyncCollection invalid token error=nil, want error")
+	}
+	if !carddavx.IsInvalidSyncToken(err) {
+		t.Fatalf("SyncCollection invalid token err=%v, want invalid-sync-token marker", err)
+	}
+}
+
+func openSyncStore(t *testing.T) *db.Store {
+	t.Helper()
+	store, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "contactd.sqlite"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	return store
+}
+
+func sampleCard(uid, fn string) vcard.Card {
+	c := make(vcard.Card)
+	c.SetValue(vcard.FieldVersion, "3.0")
+	c.SetValue(vcard.FieldUID, uid)
+	c.SetValue(vcard.FieldFormattedName, fn)
+	return c
+}
