@@ -349,8 +349,8 @@ func (s *Store) GetAddressbookByUsernameSlug(ctx context.Context, username, slug
 	return ab, nil
 }
 
-func (s *Store) UpdateAddressbookMetadataByUsernameSlug(ctx context.Context, username, slug string, displayname, description *string) error {
-	if displayname == nil && description == nil {
+func (s *Store) UpdateAddressbookMetadataByUsernameSlug(ctx context.Context, username, slug string, displayname, description, color *string) error {
+	if displayname == nil && description == nil && color == nil {
 		return nil
 	}
 	now := s.now().UTC()
@@ -359,7 +359,8 @@ func (s *Store) UpdateAddressbookMetadataByUsernameSlug(ctx context.Context, use
 		SET
 			displayname = CASE WHEN ? THEN ? ELSE displayname END,
 			description = CASE WHEN ? THEN ? ELSE description END,
-			updated_at = CASE WHEN (? OR ?) THEN ? ELSE updated_at END
+			color = CASE WHEN ? THEN ? ELSE color END,
+			updated_at = CASE WHEN (? OR ? OR ?) THEN ? ELSE updated_at END
 		WHERE id IN (
 			SELECT ab.id
 			FROM addressbooks ab
@@ -369,7 +370,8 @@ func (s *Store) UpdateAddressbookMetadataByUsernameSlug(ctx context.Context, use
 	`,
 		displayname != nil, stringValue(displayname),
 		description != nil, stringValue(description),
-		displayname != nil, description != nil, now,
+		color != nil, stringValue(color),
+		displayname != nil, description != nil, color != nil, now,
 		username, slug,
 	)
 	if err != nil {

@@ -1248,6 +1248,110 @@ func TestHandler_Proppatch_AddressbookMetadata_MixedSupportedAndUnsupportedProps
 	}
 }
 
+func TestHandler_Proppatch_AddressbookColor_DisabledReturnsForbiddenPropstat(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:INF="http://inf-it.com/ns/ab/">
+  <D:set>
+    <D:prop>
+      <INF:addressbook-color>#ff0000</INF:addressbook-color>
+    </D:prop>
+  </D:set>
+</D:propertyupdate>`
+	req := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPPATCH color disabled status = %d, want %d", got, want)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "addressbook-color") || !strings.Contains(body, "403 Forbidden") {
+		t.Fatalf("PROPPATCH color disabled missing 403 propstat: %q", body)
+	}
+}
+
+func TestHandler_Proppatch_AddressbookColor_EnabledPersistsAndPropfindExposes(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend:                backend,
+		Sync:                   carddavx.NewSyncService(store),
+		EnableAddressbookColor: true,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	patchReq := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:INF="http://inf-it.com/ns/ab/">
+  <D:set>
+    <D:prop>
+      <INF:addressbook-color>#ff0000ff</INF:addressbook-color>
+    </D:prop>
+  </D:set>
+</D:propertyupdate>`))
+	patchReq.SetBasicAuth("alice", "secret")
+	patchReq.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	patchRes := httptest.NewRecorder()
+	h.ServeHTTP(patchRes, patchReq)
+
+	if got, want := patchRes.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPPATCH color enabled status = %d, want %d", got, want)
+	}
+	if body := patchRes.Body.String(); !strings.Contains(body, "addressbook-color") || !strings.Contains(body, "200 OK") {
+		t.Fatalf("PROPPATCH color enabled body missing 200 propstat: %q", body)
+	}
+
+	propfindReq := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:INF="http://inf-it.com/ns/ab/">
+  <D:prop>
+    <INF:addressbook-color/>
+  </D:prop>
+</D:propfind>`))
+	propfindReq.SetBasicAuth("alice", "secret")
+	propfindReq.Header.Set("Depth", "0")
+	propfindReq.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	propfindRes := httptest.NewRecorder()
+	h.ServeHTTP(propfindRes, propfindReq)
+
+	if got, want := propfindRes.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND color enabled status = %d, want %d", got, want)
+	}
+	body := propfindRes.Body.String()
+	if strings.Contains(body, "404 Not Found") {
+		t.Fatalf("PROPFIND color enabled unexpectedly 404: %q", body)
+	}
+	if !strings.Contains(body, "addressbook-color") || !strings.Contains(body, "#ff0000ff") {
+		t.Fatalf("PROPFIND color enabled missing color value: %q", body)
+	}
+}
+
 func TestHandler_Proppatch_InvalidXML_Returns400(t *testing.T) {
 	t.Parallel()
 

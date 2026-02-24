@@ -39,6 +39,7 @@ type ServeConfig struct {
 	DefaultBookName             string
 	ChangeRetentionDays         int
 	ChangeRetentionMaxRevisions int64
+	EnableAddressbookColor      bool
 	Users                       []SeedUser
 }
 
@@ -122,6 +123,11 @@ func applyEnv(cfg *ServeConfig, env map[string]string) {
 			cfg.ChangeRetentionMaxRevisions = n
 		}
 	}
+	if v, ok := env["CONTACTD_ENABLE_ADDRESSBOOK_COLOR"]; ok && strings.TrimSpace(v) != "" {
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			cfg.EnableAddressbookColor = b
+		}
+	}
 }
 
 func parseFlags(cfg *ServeConfig, args []string) error {
@@ -140,6 +146,7 @@ func parseFlags(cfg *ServeConfig, args []string) error {
 	fs.StringVar(&cfg.DefaultBookName, "default-book-name", cfg.DefaultBookName, "default addressbook display name")
 	fs.IntVar(&cfg.ChangeRetentionDays, "change-retention-days", cfg.ChangeRetentionDays, "retain card_changes for this many days")
 	fs.Int64Var(&cfg.ChangeRetentionMaxRevisions, "change-retention-max-revisions", cfg.ChangeRetentionMaxRevisions, "keep latest N revisions per addressbook (0 disables)")
+	fs.BoolVar(&cfg.EnableAddressbookColor, "enable-addressbook-color", cfg.EnableAddressbookColor, "enable INF:addressbook-color PROPPATCH/PROPFIND support")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse serve flags: %w", err)

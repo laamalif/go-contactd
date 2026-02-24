@@ -113,15 +113,27 @@ func (b *Backend) DeleteAddressBook(ctx context.Context, p string) error {
 	return nil
 }
 
-func (b *Backend) UpdateAddressBookMetadata(ctx context.Context, p string, displayname, description *string) error {
+func (b *Backend) UpdateAddressBookMetadata(ctx context.Context, p string, displayname, description, color *string) error {
 	user, slug, err := parseAddressbookPathForPrincipal(ctx, p)
 	if err != nil {
 		return err
 	}
-	if err := b.store.UpdateAddressbookMetadataByUsernameSlug(ctx, user, slug, displayname, description); err != nil {
+	if err := b.store.UpdateAddressbookMetadataByUsernameSlug(ctx, user, slug, displayname, description, color); err != nil {
 		return mapStoreErr(err)
 	}
 	return nil
+}
+
+func (b *Backend) GetAddressBookColor(ctx context.Context, p string) (string, error) {
+	user, slug, err := parseAddressbookPathForPrincipal(ctx, p)
+	if err != nil {
+		return "", err
+	}
+	ab, err := b.store.GetAddressbookByUsernameSlug(ctx, user, slug)
+	if err != nil {
+		return "", mapStoreErr(err)
+	}
+	return ab.Color, nil
 }
 
 func (b *Backend) GetAddressObject(ctx context.Context, p string, _ *gocarddav.AddressDataRequest) (*gocarddav.AddressObject, error) {

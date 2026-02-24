@@ -63,3 +63,27 @@ func TestLoadServeConfig_VCardMaxBytesMustNotExceedRequestMaxBytes(t *testing.T)
 		t.Fatalf("error %q does not mention vcard max bytes", err)
 	}
 }
+
+func TestLoadServeConfig_EnableAddressbookColorFlag_Priority(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.LoadServeConfig([]string{"--enable-addressbook-color=false"}, map[string]string{
+		"CONTACTD_ENABLE_ADDRESSBOOK_COLOR": "true",
+	})
+	if err != nil {
+		t.Fatalf("LoadServeConfig returned error: %v", err)
+	}
+	if cfg.EnableAddressbookColor {
+		t.Fatalf("EnableAddressbookColor = %v, want false (flag overrides env)", cfg.EnableAddressbookColor)
+	}
+
+	cfg, err = config.LoadServeConfig(nil, map[string]string{
+		"CONTACTD_ENABLE_ADDRESSBOOK_COLOR": "true",
+	})
+	if err != nil {
+		t.Fatalf("LoadServeConfig env returned error: %v", err)
+	}
+	if !cfg.EnableAddressbookColor {
+		t.Fatalf("EnableAddressbookColor = %v, want true from env", cfg.EnableAddressbookColor)
+	}
+}

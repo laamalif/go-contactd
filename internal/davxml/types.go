@@ -10,6 +10,7 @@ const (
 	NamespaceDAV     = "DAV:"
 	NamespaceCardDAV = "urn:ietf:params:xml:ns:carddav"
 	NamespaceCS      = "http://calendarserver.org/ns/"
+	NamespaceINF     = "http://inf-it.com/ns/ab/"
 )
 
 type MultiStatus struct {
@@ -61,6 +62,7 @@ type Prop struct {
 	SupportedReportSet   *SupportedReportSet `xml:"DAV: supported-report-set,omitempty"`
 	DisplayName          string              `xml:"DAV: displayname,omitempty"`
 	AddressbookDesc      string              `xml:"urn:ietf:params:xml:ns:carddav addressbook-description,omitempty"`
+	AddressbookColor     string              `xml:"http://inf-it.com/ns/ab/ addressbook-color,omitempty"`
 	SyncToken            string              `xml:"DAV: sync-token,omitempty"`
 	GetCTag              string              `xml:"http://calendarserver.org/ns/ getctag,omitempty"`
 	GetETag              string              `xml:"DAV: getetag,omitempty"`

@@ -23,14 +23,15 @@ import (
 )
 
 type HandlerOptions struct {
-	ReadyCheck      func(context.Context) error
-	Logger          *slog.Logger
-	Authenticate    func(context.Context, string, string) (string, bool, error)
-	AttachPrincipal func(context.Context, string) context.Context
-	Backend         gocarddav.Backend
-	Sync            *carddavx.SyncService
-	RequestMaxBytes int64
-	VCardMaxBytes   int64
+	ReadyCheck             func(context.Context) error
+	Logger                 *slog.Logger
+	Authenticate           func(context.Context, string, string) (string, bool, error)
+	AttachPrincipal        func(context.Context, string) context.Context
+	Backend                gocarddav.Backend
+	Sync                   *carddavx.SyncService
+	EnableAddressbookColor bool
+	RequestMaxBytes        int64
+	VCardMaxBytes          int64
 }
 
 func NewHandler(opts HandlerOptions) http.Handler {
@@ -51,7 +52,11 @@ type handler struct {
 }
 
 type addressbookMetadataUpdater interface {
-	UpdateAddressBookMetadata(ctx context.Context, p string, displayname, description *string) error
+	UpdateAddressBookMetadata(ctx context.Context, p string, displayname, description, color *string) error
+}
+
+type addressbookColorReader interface {
+	GetAddressBookColor(ctx context.Context, p string) (string, error)
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -423,6 +428,7 @@ func (h *handler) handleProppatch(w http.ResponseWriter, r *http.Request) {
 		unsupported        []davxml.RawProp
 		displayname        *string
 		description        *string
+		color              *string
 	)
 	for _, op := range req.Ops {
 		switch {
@@ -444,16 +450,25 @@ func (h *handler) handleProppatch(w http.ResponseWriter, r *http.Request) {
 				v := op.Value
 				description = &v
 			}
+		case matchXMLName(op.Name, xml.Name{Space: davxml.NamespaceINF, Local: "addressbook-color"}) && h.opts.EnableAddressbookColor:
+			supportedPropNames = append(supportedPropNames, davxml.RawProp{XMLName: op.Name})
+			if op.Remove {
+				v := ""
+				color = &v
+			} else {
+				v := op.Value
+				color = &v
+			}
 		default:
 			unsupported = append(unsupported, davxml.RawProp{XMLName: op.Name})
 		}
 	}
-	if (displayname != nil || description != nil) && h.opts.Backend != nil {
+	if (displayname != nil || description != nil || color != nil) && h.opts.Backend != nil {
 		updater, ok := h.opts.Backend.(addressbookMetadataUpdater)
 		if !ok {
 			unsupported = append(append([]davxml.RawProp(nil), supportedPropNames...), unsupported...)
 			supportedPropNames = nil
-		} else if err := updater.UpdateAddressBookMetadata(r.Context(), r.URL.Path, displayname, description); err != nil {
+		} else if err := updater.UpdateAddressBookMetadata(r.Context(), r.URL.Path, displayname, description, color); err != nil {
 			writeBackendError(w, err)
 			return
 		}
@@ -722,7 +737,8 @@ func (h *handler) addressbookPropfindResponse(ctx context.Context, ab gocarddav.
 	okProp := davxml.Prop{}
 	var unknown []davxml.RawProp
 	var collectionState *carddavx.CollectionState
-	requested := expandPropfindRequestedProps(req, addressbookDefaultPropNames(h.opts.Sync != nil))
+	var colorValue *string
+	requested := expandPropfindRequestedProps(req, addressbookDefaultPropNames(h.opts.Sync != nil, h.opts.EnableAddressbookColor))
 	for _, p := range requested {
 		switch {
 		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "resourcetype"}):
@@ -744,6 +760,28 @@ func (h *handler) addressbookPropfindResponse(ctx context.Context, ab gocarddav.
 				continue
 			}
 			okProp.AddressbookDesc = ab.Description
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceINF, Local: "addressbook-color"}):
+			if !h.opts.EnableAddressbookColor {
+				unknown = append(unknown, davxml.RawProp{XMLName: p})
+				continue
+			}
+			if colorValue == nil {
+				reader, ok := h.opts.Backend.(addressbookColorReader)
+				if !ok {
+					unknown = append(unknown, davxml.RawProp{XMLName: p})
+					continue
+				}
+				v, err := reader.GetAddressBookColor(ctx, ab.Path)
+				if err != nil {
+					return davxml.Response{}, err
+				}
+				colorValue = &v
+			}
+			if colorValue == nil || *colorValue == "" {
+				unknown = append(unknown, davxml.RawProp{XMLName: p})
+				continue
+			}
+			okProp.AddressbookColor = *colorValue
 		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "sync-token"}):
 			if h.opts.Sync == nil {
 				unknown = append(unknown, davxml.RawProp{XMLName: p})
@@ -810,6 +848,7 @@ func hasAnyProp(p davxml.Prop) bool {
 		p.SupportedReportSet != nil ||
 		p.DisplayName != "" ||
 		p.AddressbookDesc != "" ||
+		p.AddressbookColor != "" ||
 		p.SyncToken != "" ||
 		p.GetCTag != "" ||
 		p.GetETag != "" ||
@@ -831,7 +870,7 @@ func cardDefaultPropNames() []xml.Name {
 	}
 }
 
-func addressbookDefaultPropNames(includeExtensions bool) []xml.Name {
+func addressbookDefaultPropNames(includeExtensions, includeColor bool) []xml.Name {
 	out := []xml.Name{
 		{Space: davxml.NamespaceDAV, Local: "resourcetype"},
 		{Space: davxml.NamespaceDAV, Local: "supported-report-set"},
@@ -841,6 +880,9 @@ func addressbookDefaultPropNames(includeExtensions bool) []xml.Name {
 			xml.Name{Space: davxml.NamespaceDAV, Local: "sync-token"},
 			xml.Name{Space: davxml.NamespaceCS, Local: "getctag"},
 		)
+	}
+	if includeColor {
+		out = append(out, xml.Name{Space: davxml.NamespaceINF, Local: "addressbook-color"})
 	}
 	return out
 }

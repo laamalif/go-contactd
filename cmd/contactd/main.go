@@ -391,13 +391,14 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 	}
 
 	h := server.NewHandler(server.HandlerOptions{
-		Logger:          logger,
-		ReadyCheck:      store.Ready,
-		Backend:         contactcarddav.NewBackend(store),
-		Sync:            carddavx.NewSyncService(store),
-		RequestMaxBytes: cfg.RequestMaxBytes,
-		VCardMaxBytes:   cfg.VCardMaxBytes,
-		AttachPrincipal: contactcarddav.WithPrincipal,
+		Logger:                 logger,
+		ReadyCheck:             store.Ready,
+		Backend:                contactcarddav.NewBackend(store),
+		Sync:                   carddavx.NewSyncService(store),
+		EnableAddressbookColor: cfg.EnableAddressbookColor,
+		RequestMaxBytes:        cfg.RequestMaxBytes,
+		VCardMaxBytes:          cfg.VCardMaxBytes,
+		AttachPrincipal:        contactcarddav.WithPrincipal,
 		Authenticate: func(ctx context.Context, username, password string) (string, bool, error) {
 			ok, _, err := store.AuthenticateUser(ctx, username, password)
 			if err != nil {
