@@ -45,8 +45,33 @@ func runMain(args []string, env map[string]string, stdout, stderr io.Writer) int
 
 func runMainWithInput(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: go-contactd <subcommand>")
+		printRootUsage(stderr)
 		return 2
+	}
+	if isHelpToken(args[0]) {
+		printRootHelp(stdout)
+		return 0
+	}
+	if args[0] == "help" {
+		if len(args) == 1 {
+			printRootHelp(stdout)
+			return 0
+		}
+		switch args[1] {
+		case "user":
+			printUserHelp(stdout)
+			return 0
+		case "version":
+			printVersionHelp(stdout)
+			return 0
+		case "serve":
+			printServeHelp(stdout)
+			return 0
+		default:
+			_, _ = fmt.Fprintf(stderr, "unknown subcommand: %s\n", args[1])
+			printRootUsage(stderr)
+			return 2
+		}
 	}
 
 	switch args[0] {
@@ -58,7 +83,7 @@ func runMainWithInput(args []string, env map[string]string, stdin io.Reader, std
 		return runVersion(args[1:], stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown subcommand: %s\n", args[0])
-		_, _ = fmt.Fprintln(stderr, "usage: go-contactd <subcommand>")
+		printRootUsage(stderr)
 		return 2
 	}
 }
@@ -183,8 +208,12 @@ func serveHTTPGracefully(runCtx context.Context, srv serveHTTPServer, logger *sl
 
 func runUser(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: go-contactd user <add|list|delete|passwd>")
+		printUserUsage(stderr)
 		return 2
+	}
+	if isHelpToken(args[0]) || args[0] == "help" {
+		printUserHelp(stdout)
+		return 0
 	}
 
 	switch args[0] {
@@ -198,9 +227,51 @@ func runUser(args []string, env map[string]string, stdin io.Reader, stdout, stde
 		return runUserPasswd(args[1:], env, stdin, stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown user subcommand: %s\n", args[0])
-		_, _ = fmt.Fprintln(stderr, "usage: go-contactd user <add|list|delete|passwd>")
+		printUserUsage(stderr)
 		return 2
 	}
+}
+
+func isHelpToken(s string) bool {
+	return s == "-h" || s == "--help"
+}
+
+func printRootUsage(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "usage: go-contactd <subcommand>")
+}
+
+func printRootHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "usage: go-contactd <subcommand>")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "subcommands:")
+	_, _ = fmt.Fprintln(w, "  serve    start the CardDAV HTTP service")
+	_, _ = fmt.Fprintln(w, "  user     manage users")
+	_, _ = fmt.Fprintln(w, "  version  print build metadata")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "run 'go-contactd help <subcommand>' for more details")
+}
+
+func printUserUsage(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "usage: go-contactd user <add|list|delete|passwd>")
+}
+
+func printUserHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "usage: go-contactd user <add|list|delete|passwd>")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "subcommands:")
+	_, _ = fmt.Fprintln(w, "  add     create a user (use --password-stdin to avoid argv leaks)")
+	_, _ = fmt.Fprintln(w, "  list    list users")
+	_, _ = fmt.Fprintln(w, "  delete  delete a user by --username or --id")
+	_, _ = fmt.Fprintln(w, "  passwd  update a user password (supports --password-stdin)")
+}
+
+func printVersionHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "usage: go-contactd version [--format text|json]")
+}
+
+func printServeHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "usage: go-contactd serve [flags]")
+	_, _ = fmt.Fprintln(w, "hint: run 'go-contactd serve' with env vars or flags; see README for deployment examples")
 }
 
 const defaultCLIDBPath = "/var/db/contactd.db"

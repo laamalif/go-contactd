@@ -273,6 +273,70 @@ func TestRunMain_Version_NoDaemonAccessLogs(t *testing.T) {
 	}
 }
 
+func TestRunMain_RootHelpFlagsAndSubcommand(t *testing.T) {
+	t.Parallel()
+
+	cases := [][]string{
+		{"--help"},
+		{"-h"},
+		{"help"},
+	}
+	for _, args := range cases {
+		args := args
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			t.Parallel()
+
+			var stdout, stderr bytes.Buffer
+			code := runMain(args, map[string]string{}, &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("runMain(%v) code = %d, want 0 stderr=%q", args, code, stderr.String())
+			}
+			out := stdout.String()
+			if !strings.Contains(out, "usage: go-contactd <subcommand>") {
+				t.Fatalf("stdout missing root usage: %q", out)
+			}
+			if !strings.Contains(out, "serve") || !strings.Contains(out, "user") || !strings.Contains(out, "version") {
+				t.Fatalf("stdout missing subcommand list: %q", out)
+			}
+			if got := stderr.String(); got != "" {
+				t.Fatalf("stderr = %q, want empty", got)
+			}
+		})
+	}
+}
+
+func TestRunMain_UserHelpFlagsAndSubcommand(t *testing.T) {
+	t.Parallel()
+
+	cases := [][]string{
+		{"user", "--help"},
+		{"user", "-h"},
+		{"user", "help"},
+	}
+	for _, args := range cases {
+		args := args
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			t.Parallel()
+
+			var stdout, stderr bytes.Buffer
+			code := runMain(args, map[string]string{}, &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("runMain(%v) code = %d, want 0 stderr=%q", args, code, stderr.String())
+			}
+			out := stdout.String()
+			if !strings.Contains(out, "usage: go-contactd user <add|list|delete|passwd>") {
+				t.Fatalf("stdout missing user usage: %q", out)
+			}
+			if !strings.Contains(out, "password-stdin") {
+				t.Fatalf("stdout missing password-stdin hint: %q", out)
+			}
+			if got := stderr.String(); got != "" {
+				t.Fatalf("stderr = %q, want empty", got)
+			}
+		})
+	}
+}
+
 func TestLogging_CLI_NoDaemonAccessLogs(t *testing.T) {
 	t.Parallel()
 
