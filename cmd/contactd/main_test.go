@@ -213,8 +213,11 @@ func TestNewServeLogger_FormatAndLevel(t *testing.T) {
 		t.Fatalf("warn-level text logger should suppress info logs, got %q", got)
 	}
 	textLogger.Warn("request", "event", "request")
-	if got := textBuf.String(); !strings.Contains(got, "level=WARN") {
-		t.Fatalf("text logger output missing WARN level: %q", got)
+	if got := textBuf.String(); !strings.Contains(got, "contactd[") || !strings.Contains(got, "warning: request") {
+		t.Fatalf("text logger output not in daemon/syslog style: %q", got)
+	}
+	if strings.Contains(textBuf.String(), "event=") || strings.Contains(textBuf.String(), "level=") {
+		t.Fatalf("text logger output should not use slog key=value text format: %q", textBuf.String())
 	}
 }
 
@@ -250,10 +253,10 @@ func TestServeHTTPGracefully_LogsShutdownAndStopped(t *testing.T) {
 	}
 
 	out := logs.String()
-	if !strings.Contains(out, "event=\"server shutdown\"") {
+	if !strings.Contains(out, "server shutdown") {
 		t.Fatalf("logs missing server shutdown event: %q", out)
 	}
-	if !strings.Contains(out, "event=\"server stopped\"") {
+	if !strings.Contains(out, "server stopped") {
 		t.Fatalf("logs missing server stopped event: %q", out)
 	}
 }
@@ -451,8 +454,11 @@ func TestLogging_Format_TextAndJSON(t *testing.T) {
 
 	var textBuf bytes.Buffer
 	newServeLogger("text", "info", &textBuf).Info("request", "event", "request")
-	if got := textBuf.String(); !strings.Contains(got, "event=request") {
-		t.Fatalf("text logger output missing structured field: %q", got)
+	if got := textBuf.String(); !strings.Contains(got, "contactd[") || !strings.Contains(got, ": request") {
+		t.Fatalf("text logger output not daemon/syslog style: %q", got)
+	}
+	if strings.Contains(textBuf.String(), "event=") {
+		t.Fatalf("text logger should suppress duplicate event attr in text mode: %q", textBuf.String())
 	}
 
 	var jsonBuf bytes.Buffer
@@ -700,7 +706,7 @@ func TestServeHTTPGracefully_ListenFailureLogsEvent(t *testing.T) {
 		t.Fatalf("serveHTTPGracefully code = %d, want 1", code)
 	}
 	out := logs.String()
-	if !strings.Contains(out, "event=\"listen failed\"") {
+	if !strings.Contains(out, "error: listen failed") {
 		t.Fatalf("logs missing listen failed event: %q", out)
 	}
 }
@@ -715,7 +721,7 @@ func TestPrepareServeRuntime_LogsDBErrorOnOpenFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("prepareServeRuntime error=nil, want open db error")
 	}
-	if got := logs.String(); !strings.Contains(got, "event=\"db error\"") {
+	if got := logs.String(); !strings.Contains(got, "error: db error") {
 		t.Fatalf("logs missing db error event: %q", got)
 	}
 }
@@ -805,6 +811,41 @@ func TestPruneOnce_AppliesRetentionConfig(t *testing.T) {
 	}
 	if got := logBuf.String(); !strings.Contains(got, "event=\"changes pruned\"") {
 		t.Fatalf("pruneOnce log missing changes pruned event: %q", got)
+	}
+}
+
+func TestDeferredLogWriter_BuffersUntilActivateThenForwards(t *testing.T) {
+	t.Parallel()
+
+	var sink bytes.Buffer
+	w := newDeferredLogWriter(&sink)
+
+	if _, err := w.Write([]byte("startup-1\n")); err != nil {
+		t.Fatalf("Write startup: %v", err)
+	}
+	if got := sink.String(); got != "" {
+		t.Fatalf("sink before activate = %q, want empty", got)
+	}
+
+	if err := w.Activate(); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if got, want := sink.String(), "startup-1\n"; got != want {
+		t.Fatalf("sink after activate = %q, want %q", got, want)
+	}
+
+	if _, err := w.Write([]byte("runtime-1\n")); err != nil {
+		t.Fatalf("Write runtime: %v", err)
+	}
+	if got, want := sink.String(), "startup-1\nruntime-1\n"; got != want {
+		t.Fatalf("sink after runtime write = %q, want %q", got, want)
+	}
+
+	if err := w.Activate(); err != nil {
+		t.Fatalf("second Activate: %v", err)
+	}
+	if got, want := sink.String(), "startup-1\nruntime-1\n"; got != want {
+		t.Fatalf("sink after second activate = %q, want no duplicates", got)
 	}
 }
 

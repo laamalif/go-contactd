@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,7 +14,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -185,8 +187,8 @@ func runServeNamed(prog string, args []string, env map[string]string, stderr io.
 		printServeHelp(stderr)
 		return 0
 	}
-	var startupLogBuf bytes.Buffer
-	rt, err := prepareServeRuntime(context.Background(), args, env, &startupLogBuf)
+	startupLogs := newDeferredLogWriter(stderr)
+	rt, err := prepareServeRuntime(context.Background(), args, env, startupLogs)
 	if err != nil {
 		err = humanizeServeFatalError(extractDBPathForFatal(args, env), err)
 		if stderr != nil {
@@ -194,9 +196,7 @@ func runServeNamed(prog string, args []string, env map[string]string, stderr io.
 		}
 		return 2
 	}
-	if stderr != nil && startupLogBuf.Len() > 0 {
-		_, _ = io.Copy(stderr, &startupLogBuf)
-	}
+	_ = startupLogs.Activate()
 	defer func() { _ = rt.close() }()
 
 	rt.logger.Info(
@@ -219,6 +219,51 @@ func runServeNamed(prog string, args []string, env map[string]string, stderr io.
 	stopPrune := startConfiguredPruneLoop(sigCtx, rt.store, rt.cfg, rt.logger)
 	defer stopPrune()
 	return serveHTTPGracefully(sigCtx, srv, rt.logger)
+}
+
+type deferredLogWriter struct {
+	mu     sync.Mutex
+	live   io.Writer
+	buf    []byte
+	active bool
+}
+
+func newDeferredLogWriter(live io.Writer) *deferredLogWriter {
+	return &deferredLogWriter{live: live}
+}
+
+func (w *deferredLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.active {
+		if w.live == nil {
+			return len(p), nil
+		}
+		return w.live.Write(p)
+	}
+	w.buf = append(w.buf, p...)
+	return len(p), nil
+}
+
+func (w *deferredLogWriter) Activate() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.active {
+		return nil
+	}
+	w.active = true
+	if w.live == nil || len(w.buf) == 0 {
+		w.buf = nil
+		return nil
+	}
+	_, err := w.live.Write(w.buf)
+	if err != nil {
+		return err
+	}
+	w.buf = nil
+	return nil
 }
 
 func humanizeServeFatalError(dbPath string, err error) error {
@@ -852,13 +897,195 @@ func newServeLogger(format, level string, out io.Writer) *slog.Logger {
 	if out == nil {
 		out = io.Discard
 	}
-	opts := &slog.HandlerOptions{Level: parseSlogLevel(level)}
+	lvl := parseSlogLevel(level)
 	switch format {
 	case "json":
-		return slog.New(slog.NewJSONHandler(out, opts))
+		return slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: lvl}))
 	default:
-		return slog.New(slog.NewTextHandler(out, opts))
+		return slog.New(newDaemonTextHandler(out, lvl, "contactd"))
 	}
+}
+
+type daemonTextHandler struct {
+	out    io.Writer
+	level  slog.Leveler
+	prog   string
+	pid    int
+	mu     *sync.Mutex
+	attrs  []slog.Attr
+	groups []string
+}
+
+func newDaemonTextHandler(out io.Writer, level slog.Leveler, prog string) slog.Handler {
+	if out == nil {
+		out = io.Discard
+	}
+	if level == nil {
+		level = slog.LevelInfo
+	}
+	prog = strings.TrimSpace(prog)
+	if prog == "" {
+		prog = "contactd"
+	}
+	return &daemonTextHandler{
+		out:   out,
+		level: level,
+		prog:  prog,
+		pid:   os.Getpid(),
+		mu:    &sync.Mutex{},
+	}
+}
+
+func (h *daemonTextHandler) Enabled(_ context.Context, l slog.Level) bool {
+	return l >= h.level.Level()
+}
+
+func (h *daemonTextHandler) Handle(_ context.Context, r slog.Record) error {
+	var b strings.Builder
+
+	ts := r.Time
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	b.WriteString(ts.Format("Jan _2 15:04:05"))
+	b.WriteByte(' ')
+	b.WriteString(h.prog)
+	b.WriteByte('[')
+	b.WriteString(strconv.Itoa(h.pid))
+	b.WriteString("]: ")
+
+	if pfx := daemonLevelPrefix(r.Level); pfx != "" {
+		b.WriteString(pfx)
+	}
+	msg := strings.TrimSpace(r.Message)
+	if msg == "" {
+		msg = "log"
+	}
+	b.WriteString(msg)
+
+	attrs := make([]slog.Attr, 0, len(h.attrs)+8)
+	attrs = append(attrs, h.attrs...)
+	r.Attrs(func(a slog.Attr) bool {
+		attrs = append(attrs, a)
+		return true
+	})
+	for _, a := range attrs {
+		for _, fa := range flattenDaemonAttr(h.groups, a) {
+			if skipDaemonTextAttr(msg, fa) {
+				continue
+			}
+			b.WriteByte(' ')
+			b.WriteString(fa.Key)
+			b.WriteByte('=')
+			b.WriteString(formatDaemonAttrValue(msg, fa))
+		}
+	}
+	b.WriteByte('\n')
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, err := io.WriteString(h.out, b.String())
+	return err
+}
+
+func (h *daemonTextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	nh := *h
+	nh.attrs = append(slices.Clone(h.attrs), attrs...)
+	return &nh
+}
+
+func (h *daemonTextHandler) WithGroup(name string) slog.Handler {
+	if strings.TrimSpace(name) == "" {
+		return h
+	}
+	nh := *h
+	nh.groups = append(slices.Clone(h.groups), name)
+	return &nh
+}
+
+func daemonLevelPrefix(l slog.Level) string {
+	switch {
+	case l >= slog.LevelError:
+		return "error: "
+	case l >= slog.LevelWarn:
+		return "warning: "
+	case l < slog.LevelInfo:
+		return "debug: "
+	default:
+		return ""
+	}
+}
+
+func flattenDaemonAttr(groups []string, a slog.Attr) []slog.Attr {
+	a.Value = a.Value.Resolve()
+	if a.Equal(slog.Attr{}) {
+		return nil
+	}
+	key := a.Key
+	if len(groups) > 0 && key != "" {
+		key = strings.Join(append(slices.Clone(groups), key), ".")
+	}
+	if a.Value.Kind() != slog.KindGroup {
+		return []slog.Attr{{Key: key, Value: a.Value}}
+	}
+	var out []slog.Attr
+	for _, ga := range a.Value.Group() {
+		nextGroups := groups
+		if a.Key != "" {
+			nextGroups = append(slices.Clone(groups), a.Key)
+		}
+		out = append(out, flattenDaemonAttr(nextGroups, ga)...)
+	}
+	return out
+}
+
+func skipDaemonTextAttr(msg string, a slog.Attr) bool {
+	if a.Key == "" {
+		return true
+	}
+	if a.Key == "event" && a.Value.Kind() == slog.KindString && strings.TrimSpace(a.Value.String()) == msg {
+		return true
+	}
+	return false
+}
+
+func formatDaemonAttrValue(msg string, a slog.Attr) string {
+	if msg == "request" && a.Key == "user" && a.Value.Kind() == slog.KindString && a.Value.String() == "" {
+		return "-"
+	}
+	switch a.Value.Kind() {
+	case slog.KindString:
+		return quoteDaemonTextIfNeeded(a.Value.String())
+	case slog.KindBool:
+		if a.Value.Bool() {
+			return "true"
+		}
+		return "false"
+	case slog.KindInt64:
+		return fmt.Sprintf("%d", a.Value.Int64())
+	case slog.KindUint64:
+		return fmt.Sprintf("%d", a.Value.Uint64())
+	case slog.KindFloat64:
+		return fmt.Sprintf("%g", a.Value.Float64())
+	case slog.KindDuration:
+		return a.Value.Duration().String()
+	case slog.KindTime:
+		return a.Value.Time().Format(time.RFC3339)
+	case slog.KindAny:
+		return quoteDaemonTextIfNeeded(fmt.Sprint(a.Value.Any()))
+	default:
+		return quoteDaemonTextIfNeeded(a.Value.String())
+	}
+}
+
+func quoteDaemonTextIfNeeded(s string) string {
+	if s == "" {
+		return `""`
+	}
+	if strings.ContainsAny(s, " \t\r\n\"=") {
+		return fmt.Sprintf("%q", s)
+	}
+	return s
 }
 
 func parseSlogLevel(v string) slog.Level {
