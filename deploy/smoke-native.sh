@@ -12,6 +12,12 @@ DB_PATH="${TMP_DIR}/contactd.sqlite"
 SERVER_LOG="${TMP_DIR}/server.log"
 SERVER_PID=""
 IMPORT_CONFLICT_DIR="${TMP_DIR}/import-conflict"
+IMPORT_MALFORMED_DIR="${TMP_DIR}/import-malformed"
+IMPORT_MULTICARD_DIR="${TMP_DIR}/import-multicard"
+IMPORT_ATOMIC_DIR="${TMP_DIR}/import-atomic"
+IMPORT_BAD_UID_FILE="${TMP_DIR}/import-bad-uid.vcf"
+IMPORT_OVERSIZE_FILE="${TMP_DIR}/import-oversize.vcf"
+EXPORT_VERIFY_DIR="${TMP_DIR}/export-verify"
 
 cleanup() {
   if [[ -n "${SERVER_PID}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
@@ -173,6 +179,73 @@ if [[ "${dry_code}" -eq 0 ]]; then
   fail "dry-run import unexpectedly succeeded on UID conflict: ${dry_out}"
 fi
 assert_contains "import error:" "${dry_out}"
+
+log "contactctl import must reject trailing garbage in directory .vcf file"
+mkdir -p "${IMPORT_MALFORMED_DIR}"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-garbage\r\nFN:Garbage\r\nEND:VCARD\r\nGARBAGE\r\n' > "${IMPORT_MALFORMED_DIR}/bad.vcf"
+set +e
+out="$("${ADMIN_BIN_PATH}" import --username bob -d "${DB_PATH}" "${IMPORT_MALFORMED_DIR}" 2>&1)"
+code=$?
+set -e
+if [[ "${code}" -eq 0 ]]; then
+  fail "directory import unexpectedly accepted trailing garbage payload: ${out}"
+fi
+assert_contains "import error:" "${out}"
+
+log "contactctl import must reject multi-card single file in directory mode"
+mkdir -p "${IMPORT_MULTICARD_DIR}"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-m1\r\nFN:M1\r\nEND:VCARD\r\nBEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-m2\r\nFN:M2\r\nEND:VCARD\r\n' > "${IMPORT_MULTICARD_DIR}/multi.vcf"
+set +e
+out="$("${ADMIN_BIN_PATH}" import --username bob -d "${DB_PATH}" "${IMPORT_MULTICARD_DIR}" 2>&1)"
+code=$?
+set -e
+if [[ "${code}" -eq 0 ]]; then
+  fail "directory import unexpectedly accepted multi-card single file: ${out}"
+fi
+assert_contains "import error:" "${out}"
+
+log "contactctl import concat must reject UID-derived invalid href"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:bad/uid\r\nFN:Bad UID\r\nEND:VCARD\r\n' > "${IMPORT_BAD_UID_FILE}"
+set +e
+out="$("${ADMIN_BIN_PATH}" import --username bob -d "${DB_PATH}" "${IMPORT_BAD_UID_FILE}" 2>&1)"
+code=$?
+set -e
+if [[ "${code}" -eq 0 ]]; then
+  fail "concat import unexpectedly accepted invalid UID-derived href: ${out}"
+fi
+assert_contains "invalid card href" "${out}"
+
+log "contactctl import concat must reject oversized vCard payload"
+{
+  printf 'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-oversize\r\nFN:Big\r\nNOTE:'
+  head -c 10490000 /dev/zero | tr '\0' 'A'
+  printf '\r\nEND:VCARD\r\n'
+} > "${IMPORT_OVERSIZE_FILE}"
+set +e
+out="$("${ADMIN_BIN_PATH}" import --username bob -d "${DB_PATH}" "${IMPORT_OVERSIZE_FILE}" 2>&1)"
+code=$?
+set -e
+if [[ "${code}" -eq 0 ]]; then
+  fail "concat import unexpectedly accepted oversized vCard: ${out}"
+fi
+assert_contains "vcard too large" "${out}"
+
+log "contactctl import failure must be atomic (no partial commit)"
+"${ADMIN_BIN_PATH}" user add -d "${DB_PATH}" --username charlie --password secret >/dev/null
+mkdir -p "${IMPORT_ATOMIC_DIR}"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-ok\r\nFN:OK\r\nEND:VCARD\r\n' > "${IMPORT_ATOMIC_DIR}/a.vcf"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Missing UID\r\nEND:VCARD\r\n' > "${IMPORT_ATOMIC_DIR}/b.vcf"
+set +e
+out="$("${ADMIN_BIN_PATH}" import --username charlie -d "${DB_PATH}" "${IMPORT_ATOMIC_DIR}" 2>&1)"
+code=$?
+set -e
+if [[ "${code}" -eq 0 ]]; then
+  fail "import unexpectedly succeeded for atomicity test: ${out}"
+fi
+rm -rf "${EXPORT_VERIFY_DIR}"
+"${ADMIN_BIN_PATH}" export --username charlie --format dir --out "${EXPORT_VERIFY_DIR}" -d "${DB_PATH}" >/dev/null
+vcf_count="$(find "${EXPORT_VERIFY_DIR}" -type f -name '*.vcf' | wc -l | tr -d ' ')"
+[[ "${vcf_count}" == "0" ]] || fail "failed import left partial cards persisted (vcf_count=${vcf_count})"
 
 log "restarting server"
 stop_server

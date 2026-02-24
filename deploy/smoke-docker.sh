@@ -10,6 +10,11 @@ PROJECT_NAME="contactdsmoke"
 HOST_PORT="${CONTACTD_HOST_PORT:-18080}"
 BASE_URL="http://127.0.0.1:${HOST_PORT}"
 CONFLICT_SRC_DIR="${TMP_DIR}/import-conflict"
+MALFORMED_SRC_DIR="${TMP_DIR}/import-malformed"
+MULTICARD_SRC_DIR="${TMP_DIR}/import-multicard"
+ATOMIC_SRC_DIR="${TMP_DIR}/import-atomic"
+BAD_UID_CONCAT_FILE="${TMP_DIR}/import-bad-uid.vcf"
+OVERSIZE_CONCAT_FILE="${TMP_DIR}/import-oversize.vcf"
 
 cleanup() {
   docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" down -v >/dev/null 2>&1 || true
@@ -95,8 +100,8 @@ CONTACTD_HOST_PORT=${HOST_PORT}
 CONTACTD_LOG_LEVEL=info
 CONTACTD_LOG_FORMAT=text
 CONTACTD_TRUST_PROXY_HEADERS=false
-CONTACTD_REQUEST_MAX_BYTES=1048576
-CONTACTD_VCARD_MAX_BYTES=1048576
+CONTACTD_REQUEST_MAX_BYTES=10485760
+CONTACTD_VCARD_MAX_BYTES=10485760
 CONTACTD_CHANGE_RETENTION_DAYS=180
 CONTACTD_CHANGE_RETENTION_MAX_REVISIONS=0
 CONTACTD_ENABLE_ADDRESSBOOK_COLOR=false
@@ -185,6 +190,78 @@ if [[ "${dry_code}" -eq 0 ]]; then
   fail "dry-run import unexpectedly succeeded on UID conflict: ${dry_out}"
 fi
 printf '%s' "${dry_out}" | grep -Fq "import error:" || fail "dry-run import conflict missing import error: ${dry_out}"
+
+log "contactctl import must reject trailing garbage in directory .vcf file"
+mkdir -p "${MALFORMED_SRC_DIR}"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-garbage\r\nFN:Garbage\r\nEND:VCARD\r\nGARBAGE\r\n' > "${MALFORMED_SRC_DIR}/bad.vcf"
+docker cp "${MALFORMED_SRC_DIR}" "${CID}:/tmp/import-malformed" >/dev/null
+set +e
+out="$(compose_exec_contactctl import --username bob -d /data/contactd.sqlite /tmp/import-malformed 2>&1)"
+code=$?
+set -e
+if [[ "${code}" -eq 0 ]]; then
+  fail "directory import unexpectedly accepted trailing garbage payload: ${out}"
+fi
+printf '%s' "${out}" | grep -Fq "import error:" || fail "missing import error for trailing-garbage payload: ${out}"
+
+log "contactctl import must reject multi-card single file in directory mode"
+mkdir -p "${MULTICARD_SRC_DIR}"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-m1\r\nFN:M1\r\nEND:VCARD\r\nBEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-m2\r\nFN:M2\r\nEND:VCARD\r\n' > "${MULTICARD_SRC_DIR}/multi.vcf"
+docker cp "${MULTICARD_SRC_DIR}" "${CID}:/tmp/import-multicard" >/dev/null
+set +e
+out="$(compose_exec_contactctl import --username bob -d /data/contactd.sqlite /tmp/import-multicard 2>&1)"
+code=$?
+set -e
+if [[ "${code}" -eq 0 ]]; then
+  fail "directory import unexpectedly accepted multi-card single file: ${out}"
+fi
+printf '%s' "${out}" | grep -Fq "import error:" || fail "missing import error for multi-card single file: ${out}"
+
+log "contactctl import concat must reject UID-derived invalid href"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:bad/uid\r\nFN:Bad UID\r\nEND:VCARD\r\n' > "${BAD_UID_CONCAT_FILE}"
+docker cp "${BAD_UID_CONCAT_FILE}" "${CID}:/tmp/import-bad-uid.vcf" >/dev/null
+set +e
+out="$(compose_exec_contactctl import --username bob -d /data/contactd.sqlite /tmp/import-bad-uid.vcf 2>&1)"
+code=$?
+set -e
+if [[ "${code}" -eq 0 ]]; then
+  fail "concat import unexpectedly accepted invalid UID-derived href: ${out}"
+fi
+printf '%s' "${out}" | grep -Fq "invalid card href" || fail "missing invalid href error: ${out}"
+
+log "contactctl import concat must reject oversized vCard payload"
+{
+  printf 'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-oversize\r\nFN:Big\r\nNOTE:'
+  head -c 10490000 /dev/zero | tr '\0' 'A'
+  printf '\r\nEND:VCARD\r\n'
+} > "${OVERSIZE_CONCAT_FILE}"
+docker cp "${OVERSIZE_CONCAT_FILE}" "${CID}:/tmp/import-oversize.vcf" >/dev/null
+set +e
+out="$(compose_exec_contactctl import --username bob -d /data/contactd.sqlite /tmp/import-oversize.vcf 2>&1)"
+code=$?
+set -e
+if [[ "${code}" -eq 0 ]]; then
+  fail "concat import unexpectedly accepted oversized vCard: ${out}"
+fi
+printf '%s' "${out}" | grep -Fq "vcard too large" || fail "missing oversize error: ${out}"
+
+log "contactctl import failure must be atomic (no partial commit)"
+compose_exec_contactctl user add --username charlie --password secret -d /data/contactd.sqlite >/dev/null
+mkdir -p "${ATOMIC_SRC_DIR}"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-ok\r\nFN:OK\r\nEND:VCARD\r\n' > "${ATOMIC_SRC_DIR}/a.vcf"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Missing UID\r\nEND:VCARD\r\n' > "${ATOMIC_SRC_DIR}/b.vcf"
+docker cp "${ATOMIC_SRC_DIR}" "${CID}:/tmp/import-atomic" >/dev/null
+set +e
+out="$(compose_exec_contactctl import --username charlie -d /data/contactd.sqlite /tmp/import-atomic 2>&1)"
+code=$?
+set -e
+if [[ "${code}" -eq 0 ]]; then
+  fail "import unexpectedly succeeded for atomicity test: ${out}"
+fi
+atomic_export="$(compose_exec_contactctl export --username charlie --format concat -d /data/contactd.sqlite 2>&1)"
+if [[ -n "${atomic_export}" ]]; then
+  fail "failed import left partial cards persisted (concat export not empty): ${atomic_export}"
+fi
 
 log "restarting container"
 docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" restart contactd

@@ -34,6 +34,7 @@ LOG="${TMP_DIR}/server.log"
 PID=""
 CURL_ERR=""
 CURL_EXIT="0"
+HTTP_BODY_FILE=""
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -66,20 +67,24 @@ fail()  {
 dav() {
   local method="$1" path="$2"; shift 2
   local tmp_hdr="${TMP_DIR}/hdr.$$"
+  local tmp_body="${TMP_DIR}/body.$$"
   local tmp_err="${TMP_DIR}/err.$$"
   CURL_ERR=""
   CURL_EXIT="0"
-  if HTTP_BODY="$(curl -sS -X "${method}" \
+  if curl -sS -X "${method}" \
     --connect-timeout "${CURL_CONNECT_TIMEOUT}" \
     --max-time "${CURL_MAX_TIME}" \
     -u alice:secret \
     -D "${tmp_hdr}" \
+    -o "${tmp_body}" \
     "$@" \
-    "${BASE}${path}" 2>"${tmp_err}")"; then
+    "${BASE}${path}" 2>"${tmp_err}"; then
     CURL_EXIT="0"
   else
     CURL_EXIT="$?"
   fi
+  HTTP_BODY_FILE="${tmp_body}"
+  HTTP_BODY="$(cat "${tmp_body}" 2>/dev/null || true)" || true
   CURL_ERR="$(cat "${tmp_err}" 2>/dev/null || true)"
   HTTP_HEADERS="$(cat "${tmp_hdr}" 2>/dev/null)" || true
   HTTP_STATUS="$(head -n1 "${tmp_hdr}" 2>/dev/null | awk '{print $2}')" || true
@@ -161,6 +166,26 @@ extract_etag_header() {
 # Count occurrences of a string in body.
 count_in_body() {
   echo "${HTTP_BODY}" | grep -o "$1" | wc -l | tr -d ' '
+}
+
+sha256_hex_body() {
+  local src="${HTTP_BODY_FILE:-}"
+  if [[ -z "${src}" || ! -f "${src}" ]]; then
+    fail "HTTP_BODY_FILE missing for SHA-256 check"
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${src}" | awk '{print $1}'
+    return 0
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${src}" | awk '{print $1}'
+    return 0
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 -binary "${src}" | od -An -tx1 -v | tr -d ' \n'
+    return 0
+  fi
+  fail "no SHA-256 command available (need sha256sum, shasum, or openssl)"
 }
 
 wait_ready() {
@@ -270,6 +295,20 @@ sync_delta_xml() {
 <D:sync-collection xmlns:D="DAV:">
   <D:sync-token>${1}</D:sync-token>
   <D:sync-level>1</D:sync-level>
+  <D:prop>
+    <D:getetag/>
+  </D:prop>
+</D:sync-collection>
+XMLEOF
+}
+
+sync_initial_limit_xml() {
+  cat <<XMLEOF
+<?xml version="1.0" encoding="utf-8"?>
+<D:sync-collection xmlns:D="DAV:">
+  <D:sync-token/>
+  <D:sync-level>1</D:sync-level>
+  <D:limit><D:nresults>${1}</D:nresults></D:limit>
   <D:prop>
     <D:getetag/>
   </D:prop>
@@ -470,6 +509,17 @@ ok "CTag changed after contact creation"
 # 6b. sync-collection with token from initial sync
 dav REPORT "/alice/contacts/" \
   -H "Content-Type: application/xml; charset=utf-8" \
+  --data-binary "$(sync_initial_limit_xml 1)"
+expect 207 "initial sync with nresults=1"
+[[ "$(count_in_body '.vcf')" == "1" ]] || fail "initial sync limit should return exactly 1 item, got $(count_in_body '.vcf'); body=${HTTP_BODY}"
+body_has "507" "initial sync limit truncated page has 507 self response"
+SYNC_TOKEN_LIMIT="$(extract_sync_token)"
+[[ -n "${SYNC_TOKEN_LIMIT}" ]] || fail "missing sync-token in initial limited sync"
+ok "initial limited sync returns continuation token"
+
+# 6c. sync-collection with token from initial sync
+dav REPORT "/alice/contacts/" \
+  -H "Content-Type: application/xml; charset=utf-8" \
   --data-binary "$(sync_delta_xml "${SYNC_TOKEN_0}")"
 expect 207 "delta sync after 3 PUTs"
 body_has "/alice/contacts/alice-contact.vcf" "delta includes alice-contact"
@@ -550,6 +600,10 @@ body_has "bob-new@example.com" "bob email updated"
 header_has "Content-Type" "GET has Content-Type"
 header_has "ETag" "GET has ETag"
 header_has "Content-Length" "GET has Content-Length"
+ETAG_BOB_CURRENT="$(extract_etag_header)"
+BODY_SHA256="$(sha256_hex_body)"
+[[ "${ETAG_BOB_CURRENT}" == "\"${BODY_SHA256}\"" ]] || fail "strong ETag mismatch on GET bob: etag=${ETAG_BOB_CURRENT} sha256(body)=\"${BODY_SHA256}\""
+ok "GET strong ETag matches SHA256(response body)"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PHASE 9: Contact Deletion (SyncManager.kt)
@@ -570,7 +624,15 @@ expect 204 "DELETE carol"
   fail "DELETE 204 should have empty body, got: ${HTTP_BODY}"
 ok "DELETE body is empty"
 
-# 9b. Confirm carol is gone
+# 9b. Stale If-Match delete must fail and not delete newer resource
+dav DELETE "/alice/contacts/bob-contact.vcf" \
+  -H "If-Match: ${ETAG_BOB}"
+expect 412 "DELETE bob with stale ETag → 412"
+dav GET "/alice/contacts/bob-contact.vcf"
+expect 200 "bob still exists after stale DELETE"
+body_has "FN:Bob Updated" "bob unchanged after stale DELETE"
+
+# 9c. Confirm carol is gone
 dav GET "/alice/contacts/carol-contact.vcf"
 expect 404 "carol gone after DELETE"
 
