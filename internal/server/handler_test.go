@@ -689,6 +689,38 @@ func TestHandler_Propfind_OversizeBodyReturns413(t *testing.T) {
 	}
 }
 
+func TestHandler_Propfind_MalformedOversizeBodyReturns413(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend:         backend,
+		Sync:            carddavx.NewSyncService(store),
+		RequestMaxBytes: 32,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	body := `<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:getetag/>` + strings.Repeat("X", 128)
+	req := httptest.NewRequest("PROPFIND", "/alice/contacts/a.vcf", bytes.NewBufferString(body))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusRequestEntityTooLarge; got != want {
+		t.Fatalf("PROPFIND malformed oversize status = %d, want %d", got, want)
+	}
+}
+
 func TestHandler_Propfind_AddressbookExplicitExtensionProps(t *testing.T) {
 	t.Parallel()
 
@@ -859,6 +891,37 @@ func TestHandler_Report_OversizeBodyReturns413(t *testing.T) {
 
 	if got, want := rr.Code, http.StatusRequestEntityTooLarge; got != want {
 		t.Fatalf("REPORT oversize status = %d, want %d", got, want)
+	}
+}
+
+func TestHandler_Report_MalformedOversizeBodyReturns413(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend:         backend,
+		Sync:            carddavx.NewSyncService(store),
+		RequestMaxBytes: 32,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	body := `<?xml version="1.0"?><D:sync-collection xmlns:D="DAV:"><D:sync-token>` + strings.Repeat("X", 128)
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(body))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusRequestEntityTooLarge; got != want {
+		t.Fatalf("REPORT malformed oversize status = %d, want %d", got, want)
 	}
 }
 
