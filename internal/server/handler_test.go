@@ -6,7 +6,9 @@ import (
 	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -925,6 +927,89 @@ func TestHandler_Report_SyncCollection_StalePrunedTokenReturns403ValidSyncTokenE
 	}
 }
 
+func TestHandler_Report_SyncCollection_Limit_BodyMatchesGolden(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject a: %v", err)
+	}
+	svc := carddavx.NewSyncService(store)
+	baseline, err := svc.SyncCollection(context.Background(), "alice", "contacts", "", 0)
+	if err != nil {
+		t.Fatalf("SyncCollection baseline: %v", err)
+	}
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/b.vcf", mustSampleCard("uid-b", "Bob B"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject b: %v", err)
+	}
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/c.vcf", mustSampleCard("uid-c", "Carol C"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject c: %v", err)
+	}
+	if err := backend.DeleteAddressObject(ctx, "/alice/contacts/b.vcf"); err != nil {
+		t.Fatalf("DeleteAddressObject b: %v", err)
+	}
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            svc,
+	})
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:sync-collection xmlns:D="DAV:">
+  <D:sync-token>` + baseline.SyncToken + `</D:sync-token>
+  <D:sync-level>1</D:sync-level>
+  <D:limit><D:nresults>2</D:nresults></D:limit>
+</D:sync-collection>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("sync-collection golden status = %d, want %d", got, want)
+	}
+	assertGoldenSyncXML(t, rr.Body.String(), "sync_collection_limit_multistatus.xml")
+}
+
+func TestHandler_Report_SyncCollection_InvalidToken_BodyMatchesGolden(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:sync-collection xmlns:D="DAV:">
+  <D:sync-token>urn:contactd:sync:999:1</D:sync-token>
+  <D:sync-level>1</D:sync-level>
+</D:sync-collection>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusForbidden; got != want {
+		t.Fatalf("sync-collection invalid golden status = %d, want %d", got, want)
+	}
+	assertGoldenSyncXML(t, rr.Body.String(), "sync_collection_invalid_token_error.xml")
+}
+
 func openServerBackend(t *testing.T) (*db.Store, *contactcarddav.Backend) {
 	t.Helper()
 	store, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "contactd.sqlite"))
@@ -1010,4 +1095,30 @@ func containsString(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+var (
+	reGoldenSyncToken = regexp.MustCompile(`urn:contactd:sync:\d+:\d+`)
+	reGoldenETag      = regexp.MustCompile(`&#34;[0-9a-f]{64}&#34;`)
+)
+
+func assertGoldenSyncXML(t *testing.T, gotBody, fixtureName string) {
+	t.Helper()
+	want, err := os.ReadFile(filepath.Join("testdata", fixtureName))
+	if err != nil {
+		t.Fatalf("ReadFile fixture %s: %v", fixtureName, err)
+	}
+	gotNorm := normalizeSyncGolden(gotBody)
+	wantNorm := normalizeSyncGolden(string(want))
+	if gotNorm != wantNorm {
+		t.Fatalf("golden mismatch for %s\n--- got ---\n%s\n--- want ---\n%s", fixtureName, gotNorm, wantNorm)
+	}
+}
+
+func normalizeSyncGolden(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.TrimSpace(s)
+	s = reGoldenSyncToken.ReplaceAllString(s, "{{SYNC_TOKEN}}")
+	s = reGoldenETag.ReplaceAllString(s, "{{ETAG}}")
+	return s
 }

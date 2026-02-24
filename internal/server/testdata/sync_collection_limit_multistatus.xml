@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<multistatus xmlns="DAV:">
+  <response>
+    <href>/alice/contacts/b.vcf</href>
+    <propstat>
+      <prop>
+        <getetag xmlns="DAV:">{{ETAG}}</getetag>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+  <response>
+    <href>/alice/contacts/c.vcf</href>
+    <propstat>
+      <prop>
+        <getetag xmlns="DAV:">{{ETAG}}</getetag>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+  <sync-token>{{SYNC_TOKEN}}</sync-token>
+</multistatus>
