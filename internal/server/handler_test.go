@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -528,6 +529,118 @@ func TestHandler_Propfind_CardExplicitProps_UnknownReturns404Propstat(t *testing
 	// Explicit prop request should not inject extra unrelated properties beyond requested set.
 	if strings.Contains(body, "current-user-principal") || strings.Contains(body, "addressbook-home-set") {
 		t.Fatalf("PROPFIND explicit props body leaked unrelated props: %q", body)
+	}
+}
+
+func TestHandler_Propfind_AddressbookExplicitExtensionProps(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:CS="http://calendarserver.org/ns/">
+  <D:prop>
+    <D:sync-token/>
+    <CS:getctag/>
+  </D:prop>
+</D:propfind>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND addressbook extension props status = %d, want %d", got, want)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "sync-token") || !strings.Contains(body, "getctag") {
+		t.Fatalf("PROPFIND addressbook extension props missing sync-token/getctag: %q", body)
+	}
+	if strings.Contains(body, "404 Not Found") {
+		t.Fatalf("PROPFIND addressbook extension props unexpectedly 404: %q", body)
+	}
+	syncToken, ctag := mustExtractAddressbookExtensionProps(t, body)
+	if !strings.HasPrefix(syncToken, "urn:contactd:sync:") {
+		t.Fatalf("sync-token = %q, want urn:contactd:sync:*", syncToken)
+	}
+	if _, err := strconv.ParseInt(ctag, 10, 64); err != nil {
+		t.Fatalf("getctag = %q, want numeric revision string", ctag)
+	}
+}
+
+func TestHandler_Propfind_AddressbookExtensionProps_MonotonicOnMutations(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	readProps := func() (string, int64) {
+		t.Helper()
+		req := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:CS="http://calendarserver.org/ns/">
+  <D:prop>
+    <D:sync-token/>
+    <CS:getctag/>
+  </D:prop>
+</D:propfind>`))
+		req.SetBasicAuth("alice", "secret")
+		req.Header.Set("Depth", "0")
+		req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusMultiStatus {
+			t.Fatalf("PROPFIND addressbook extension props status = %d body=%q", rr.Code, rr.Body.String())
+		}
+		syncToken, ctag := mustExtractAddressbookExtensionProps(t, rr.Body.String())
+		rev, err := strconv.ParseInt(ctag, 10, 64)
+		if err != nil {
+			t.Fatalf("ParseInt ctag %q: %v", ctag, err)
+		}
+		return syncToken, rev
+	}
+
+	sync0, ctag0 := readProps()
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject a: %v", err)
+	}
+	sync1, ctag1 := readProps()
+	if err := backend.DeleteAddressObject(ctx, "/alice/contacts/a.vcf"); err != nil {
+		t.Fatalf("DeleteAddressObject a: %v", err)
+	}
+	sync2, ctag2 := readProps()
+
+	if !(ctag1 > ctag0 && ctag2 > ctag1) {
+		t.Fatalf("getctag not monotonic: ctag0=%d ctag1=%d ctag2=%d", ctag0, ctag1, ctag2)
+	}
+	if sync0 == sync1 || sync1 == sync2 || sync0 == sync2 {
+		t.Fatalf("sync-token not changing across mutations: %q %q %q", sync0, sync1, sync2)
 	}
 }
 
@@ -1100,6 +1213,8 @@ func containsString(items []string, want string) bool {
 var (
 	reGoldenSyncToken = regexp.MustCompile(`urn:contactd:sync:\d+:\d+`)
 	reGoldenETag      = regexp.MustCompile(`&#34;[0-9a-f]{64}&#34;`)
+	rePropfindSyncTok = regexp.MustCompile(`<sync-token[^>]*>([^<]+)</sync-token>`)
+	rePropfindCTag    = regexp.MustCompile(`<getctag[^>]*>([^<]+)</getctag>`)
 )
 
 func assertGoldenSyncXML(t *testing.T, gotBody, fixtureName string) {
@@ -1121,4 +1236,17 @@ func normalizeSyncGolden(s string) string {
 	s = reGoldenSyncToken.ReplaceAllString(s, "{{SYNC_TOKEN}}")
 	s = reGoldenETag.ReplaceAllString(s, "{{ETAG}}")
 	return s
+}
+
+func mustExtractAddressbookExtensionProps(t *testing.T, body string) (syncToken, ctag string) {
+	t.Helper()
+	mTok := rePropfindSyncTok.FindStringSubmatch(body)
+	if len(mTok) != 2 {
+		t.Fatalf("missing sync-token prop in body: %q", body)
+	}
+	mCTag := rePropfindCTag.FindStringSubmatch(body)
+	if len(mCTag) != 2 {
+		t.Fatalf("missing getctag prop in body: %q", body)
+	}
+	return mTok[1], mCTag[1]
 }

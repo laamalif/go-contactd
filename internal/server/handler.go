@@ -463,7 +463,11 @@ func (h *handler) propfindPrincipal(ctx context.Context, reqPath string, depth i
 			return davxml.MultiStatus{}, err
 		}
 		for _, ab := range books {
-			responses = append(responses, addressbookPropfindResponse(ab, req))
+			resp, err := h.addressbookPropfindResponse(ctx, ab, req)
+			if err != nil {
+				return davxml.MultiStatus{}, err
+			}
+			responses = append(responses, resp)
 		}
 	}
 	return davxml.MultiStatus{Responses: responses}, nil
@@ -474,7 +478,11 @@ func (h *handler) propfindAddressbook(ctx context.Context, reqPath string, depth
 	if err != nil {
 		return davxml.MultiStatus{}, err
 	}
-	responses := []davxml.Response{addressbookPropfindResponse(*ab, req)}
+	resp, err := h.addressbookPropfindResponse(ctx, *ab, req)
+	if err != nil {
+		return davxml.MultiStatus{}, err
+	}
+	responses := []davxml.Response{resp}
 	if depth == 1 {
 		aos, err := h.opts.Backend.ListAddressObjects(ctx, reqPath, nil)
 		if err != nil {
@@ -518,21 +526,47 @@ func principalPropfindResponse(href string, req propfindRequest) davxml.Response
 	return davxml.Response{Href: href, PropStats: buildPropstats(okProp, unknown)}
 }
 
-func addressbookPropfindResponse(ab gocarddav.AddressBook, req propfindRequest) davxml.Response {
+func (h *handler) addressbookPropfindResponse(ctx context.Context, ab gocarddav.AddressBook, req propfindRequest) (davxml.Response, error) {
 	okProp := davxml.Prop{}
 	var unknown []davxml.RawProp
-	for _, p := range expandPropfindRequestedProps(req, []xml.Name{{Space: davxml.NamespaceDAV, Local: "resourcetype"}}) {
+	var collectionState *carddavx.CollectionState
+	requested := expandPropfindRequestedProps(req, addressbookDefaultPropNames(h.opts.Sync != nil))
+	for _, p := range requested {
 		switch {
 		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "resourcetype"}):
 			okProp.ResourceType = &davxml.ResourceType{
 				Collection:  davxml.DAVCollection(),
 				Addressbook: davxml.CardDAVAddressbook(),
 			}
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "sync-token"}):
+			if h.opts.Sync == nil {
+				unknown = append(unknown, davxml.RawProp{XMLName: p})
+				continue
+			}
+			state, err := h.addressbookCollectionState(ctx, ab.Path)
+			if err != nil {
+				return davxml.Response{}, err
+			}
+			collectionState = state
+			okProp.SyncToken = state.SyncToken
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceCS, Local: "getctag"}):
+			if h.opts.Sync == nil {
+				unknown = append(unknown, davxml.RawProp{XMLName: p})
+				continue
+			}
+			if collectionState == nil {
+				state, err := h.addressbookCollectionState(ctx, ab.Path)
+				if err != nil {
+					return davxml.Response{}, err
+				}
+				collectionState = state
+			}
+			okProp.GetCTag = collectionState.CTag
 		default:
 			unknown = append(unknown, davxml.RawProp{XMLName: p})
 		}
 	}
-	return davxml.Response{Href: ab.Path, PropStats: buildPropstats(okProp, unknown)}
+	return davxml.Response{Href: ab.Path, PropStats: buildPropstats(okProp, unknown)}, nil
 }
 
 func cardPropfindResponse(ao gocarddav.AddressObject, req propfindRequest) davxml.Response {
@@ -567,6 +601,8 @@ func hasAnyProp(p davxml.Prop) bool {
 		p.PrincipalURL != nil ||
 		p.AddressbookHomeSet != nil ||
 		p.ResourceType != nil ||
+		p.SyncToken != "" ||
+		p.GetCTag != "" ||
 		p.GetETag != "" ||
 		p.AddressData != "" ||
 		len(p.Extra) > 0
@@ -586,6 +622,19 @@ func cardDefaultPropNames() []xml.Name {
 	}
 }
 
+func addressbookDefaultPropNames(includeExtensions bool) []xml.Name {
+	out := []xml.Name{
+		{Space: davxml.NamespaceDAV, Local: "resourcetype"},
+	}
+	if includeExtensions {
+		out = append(out,
+			xml.Name{Space: davxml.NamespaceDAV, Local: "sync-token"},
+			xml.Name{Space: davxml.NamespaceCS, Local: "getctag"},
+		)
+	}
+	return out
+}
+
 func principalDefaultPropNames() []xml.Name {
 	return []xml.Name{
 		{Space: davxml.NamespaceDAV, Local: "current-user-principal"},
@@ -597,6 +646,21 @@ func principalDefaultPropNames() []xml.Name {
 
 func matchXMLName(a, b xml.Name) bool {
 	return a.Space == b.Space && a.Local == b.Local
+}
+
+func (h *handler) addressbookCollectionState(ctx context.Context, abPath string) (*carddavx.CollectionState, error) {
+	if h.opts.Sync == nil {
+		return nil, fmt.Errorf("sync service unavailable")
+	}
+	user, slug, ok := parseAddressbookPath(abPath)
+	if !ok {
+		return nil, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("addressbook not found"))
+	}
+	state, err := h.opts.Sync.CollectionState(ctx, user, slug)
+	if err != nil {
+		return nil, err
+	}
+	return &state, nil
 }
 
 func (h *handler) handleCardGet(w http.ResponseWriter, r *http.Request) {

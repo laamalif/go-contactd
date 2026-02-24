@@ -81,6 +81,26 @@ func NewSyncService(store *db.Store) *SyncService {
 	return &SyncService{store: store}
 }
 
+type CollectionState struct {
+	AddressbookID int64
+	Revision      int64
+	SyncToken     string
+	CTag          string
+}
+
+func (s *SyncService) CollectionState(ctx context.Context, username, slug string) (CollectionState, error) {
+	ab, err := s.store.GetAddressbookByUsernameSlug(ctx, username, slug)
+	if err != nil {
+		return CollectionState{}, err
+	}
+	return CollectionState{
+		AddressbookID: ab.ID,
+		Revision:      ab.Revision,
+		SyncToken:     FormatSyncToken(ab.ID, ab.Revision),
+		CTag:          strconv.FormatInt(ab.Revision, 10),
+	}, nil
+}
+
 func (s *SyncService) SyncCollection(ctx context.Context, username, slug, rawToken string, limit int) (SyncResult, error) {
 	ab, err := s.store.GetAddressbookByUsernameSlug(ctx, username, slug)
 	if err != nil {

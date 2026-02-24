@@ -9,6 +9,7 @@ import (
 const (
 	NamespaceDAV     = "DAV:"
 	NamespaceCardDAV = "urn:ietf:params:xml:ns:carddav"
+	NamespaceCS      = "http://calendarserver.org/ns/"
 )
 
 type MultiStatus struct {
@@ -43,6 +44,8 @@ type Prop struct {
 	PrincipalURL         *Href         `xml:"DAV: principal-URL,omitempty"`
 	AddressbookHomeSet   *Href         `xml:"urn:ietf:params:xml:ns:carddav addressbook-home-set,omitempty"`
 	ResourceType         *ResourceType `xml:"DAV: resourcetype,omitempty"`
+	SyncToken            string        `xml:"DAV: sync-token,omitempty"`
+	GetCTag              string        `xml:"http://calendarserver.org/ns/ getctag,omitempty"`
 	GetETag              string        `xml:"DAV: getetag,omitempty"`
 	AddressData          string        `xml:"urn:ietf:params:xml:ns:carddav address-data,omitempty"`
 	Extra                []RawProp     `xml:",any,omitempty"`
