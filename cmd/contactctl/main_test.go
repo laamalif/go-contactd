@@ -16,8 +16,23 @@ func TestRunMainProgramWithInput_HelpAndVersion(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("code=%d want 0 stderr=%q", code, stderr.String())
 		}
-		if got := stdout.String(); !strings.Contains(got, "usage: contactctl user <add|list|delete|passwd>") {
+		if got := stdout.String(); !strings.Contains(got, "usage: contactctl <user|export|version>") {
 			t.Fatalf("help missing admin usage: %q", got)
+		}
+		if stderr.Len() != 0 {
+			t.Fatalf("stderr=%q want empty", stderr.String())
+		}
+	})
+
+	t.Run("export help", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		code := runMainProgramWithInput("contactctl", []string{"export", "--help"}, map[string]string{}, strings.NewReader(""), &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("code=%d want 0 stderr=%q", code, stderr.String())
+		}
+		if got := stdout.String(); !strings.Contains(got, "usage: contactctl export --username <name>") {
+			t.Fatalf("export help missing usage: %q", got)
 		}
 		if stderr.Len() != 0 {
 			t.Fatalf("stderr=%q want empty", stderr.String())

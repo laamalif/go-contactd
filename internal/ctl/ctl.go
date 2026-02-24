@@ -7,6 +7,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -36,6 +38,8 @@ func RunCLI(prog string, args []string, env map[string]string, stdin io.Reader, 
 	switch args[0] {
 	case "user":
 		return RunUser(prog, args[1:], env, stdin, stdout, stderr)
+	case "export":
+		return runExport(args[1:], env, stdout, stderr)
 	case "version":
 		if runVersion == nil {
 			_, _ = fmt.Fprintln(stderr, "internal error: version handler unavailable")
@@ -87,19 +91,21 @@ func defaultProg(prog string) string {
 }
 
 func printAdminUsage(w io.Writer, prog string) {
-	_, _ = fmt.Fprintf(w, "usage: %s user <add|list|delete|passwd>\n", defaultProg(prog))
+	_, _ = fmt.Fprintf(w, "usage: %s <user|export|version>\n", defaultProg(prog))
 }
 
 func printAdminHelp(w io.Writer, prog string) {
-	_, _ = fmt.Fprintf(w, "usage: %s user <add|list|delete|passwd>\n", defaultProg(prog))
+	_, _ = fmt.Fprintf(w, "usage: %s <user|export|version>\n", defaultProg(prog))
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "commands:")
 	_, _ = fmt.Fprintln(w, "  user add      create user")
 	_, _ = fmt.Fprintln(w, "  user list     list users")
 	_, _ = fmt.Fprintln(w, "  user delete   delete user")
 	_, _ = fmt.Fprintln(w, "  user passwd   change user password")
+	_, _ = fmt.Fprintln(w, "  export        export addressbook vCards")
+	_, _ = fmt.Fprintln(w, "  version       print version")
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "run 'contactctl user -h' for user subcommand help")
+	_, _ = fmt.Fprintln(w, "run 'contactctl user -h' or 'contactctl export -h' for details")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "flags:")
 	_, _ = fmt.Fprintln(w, "  -V, --version  print version and exit")
@@ -137,6 +143,14 @@ func printUserDeleteHelp(w io.Writer) {
 
 func printUserPasswdHelp(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "usage: contactctl user passwd (--username <name> | --id <id>) (--password <pw> | --password-stdin) [--db-path <path>|--db <path>|-d <path>]")
+}
+
+func printExportHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "usage: contactctl export --username <name> [--book <slug>] [--format dir|concat] [--out <path>] [--db-path <path>|--db <path>|-d <path>]")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "formats:")
+	_, _ = fmt.Fprintln(w, "  dir     write one <href>.vcf file per card into --out directory (default)")
+	_, _ = fmt.Fprintln(w, "  concat  write concatenated stored vCards to stdout (or --out file if set)")
 }
 
 func runUserAdd(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -411,6 +425,139 @@ func runUserPasswd(args []string, env map[string]string, stdin io.Reader, stdout
 		_, _ = fmt.Fprintf(stdout, "user password updated: id=%d\n", id)
 	}
 	return 0
+}
+
+func runExport(args []string, env map[string]string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && (isHelpToken(args[0]) || args[0] == "help") {
+		printExportHelp(stdout)
+		return 0
+	}
+	fs := newCLIFlagSet("export")
+	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], config.DefaultDBPath)
+	username := ""
+	book := "contacts"
+	format := "dir"
+	outPath := ""
+	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
+	fs.StringVar(&dbPath, "db", dbPath, "alias for --db-path")
+	fs.StringVar(&dbPath, "d", dbPath, "alias for --db-path")
+	fs.StringVar(&username, "username", "", "username")
+	fs.StringVar(&book, "book", book, "addressbook slug")
+	fs.StringVar(&format, "format", format, "dir|concat")
+	fs.StringVar(&outPath, "out", outPath, "output directory (dir) or file path (concat)")
+	if err := fs.Parse(args); err != nil {
+		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
+		return 2
+	}
+	if fs.NArg() != 0 {
+		_, _ = fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
+		return 2
+	}
+	if strings.TrimSpace(username) == "" {
+		_, _ = fmt.Fprintln(stderr, "usage error: missing required --username")
+		return 2
+	}
+	if format != "dir" && format != "concat" {
+		_, _ = fmt.Fprintf(stderr, "usage error: invalid --format %q\n", format)
+		return 2
+	}
+	if format == "dir" && strings.TrimSpace(outPath) == "" {
+		_, _ = fmt.Fprintln(stderr, "usage error: --out is required for --format dir")
+		return 2
+	}
+
+	store, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+	defer func() { _ = store.Close() }()
+
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), username, book)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			_, _ = fmt.Fprintln(stderr, "not found")
+			return 3
+		}
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+	cards, err := store.ListCards(context.Background(), ab.ID)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+
+	switch format {
+	case "concat":
+		if strings.TrimSpace(outPath) == "" {
+			for _, c := range cards {
+				if _, err := stdout.Write(c.VCard); err != nil {
+					_, _ = fmt.Fprintf(stderr, "internal error: %v\n", err)
+					return 1
+				}
+			}
+			return 0
+		}
+		if err := writeConcatExportFile(outPath, cards); err != nil {
+			_, _ = fmt.Fprintf(stderr, "io error: %v\n", err)
+			return 1
+		}
+		_, _ = fmt.Fprintf(stdout, "exported: user=%s book=%s cards=%d format=concat out=%s\n", username, book, len(cards), outPath)
+		return 0
+	default: // dir
+		if err := writeDirExport(outPath, cards); err != nil {
+			_, _ = fmt.Fprintf(stderr, "io error: %v\n", err)
+			return 1
+		}
+		_, _ = fmt.Fprintf(stdout, "exported: user=%s book=%s cards=%d format=dir out=%s\n", username, book, len(cards), outPath)
+		return 0
+	}
+}
+
+func writeConcatExportFile(outPath string, cards []db.Card) error {
+	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("open concat export file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	for _, c := range cards {
+		if _, err := f.Write(c.VCard); err != nil {
+			return fmt.Errorf("write concat export file: %w", err)
+		}
+	}
+	return nil
+}
+
+func writeDirExport(outDir string, cards []db.Card) error {
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		return fmt.Errorf("mkdir export dir: %w", err)
+	}
+	for _, c := range cards {
+		name, err := safeExportCardFilename(c.Href)
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(outDir, name)
+		if err := os.WriteFile(path, c.VCard, 0o600); err != nil {
+			return fmt.Errorf("write export file %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func safeExportCardFilename(href string) (string, error) {
+	if strings.TrimSpace(href) == "" {
+		return "", fmt.Errorf("invalid card href for export: empty")
+	}
+	if strings.Contains(href, "/") || strings.Contains(href, `\`) {
+		return "", fmt.Errorf("invalid card href for export: %q", href)
+	}
+	name := filepath.Base(href)
+	if name == "." || name == ".." || name != href {
+		return "", fmt.Errorf("invalid card href for export: %q", href)
+	}
+	return name, nil
 }
 
 func resolvePasswordInput(password string, passwordStdin bool, stdin io.Reader) (string, error) {
