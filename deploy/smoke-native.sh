@@ -6,7 +6,7 @@ TMP_DIR="$(mktemp -d)"
 PORT="${CONTACTD_SMOKE_PORT:-18080}"
 LISTEN_ADDR="127.0.0.1:${PORT}"
 BASE_URL="http://${LISTEN_ADDR}"
-BIN_PATH="${TMP_DIR}/go-contactd"
+BIN_PATH="${TMP_DIR}/contactd"
 ADMIN_BIN_PATH="${TMP_DIR}/contactctl"
 DB_PATH="${TMP_DIR}/contactd.sqlite"
 SERVER_LOG="${TMP_DIR}/server.log"
@@ -89,7 +89,7 @@ CARD_A=$'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-a\r\nFN:Alice A\r\nEND:VCARD\r\n'
 CARD_B=$'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-b\r\nFN:Bob B\r\nEND:VCARD\r\n'
 SYNC_EMPTY='<?xml version="1.0" encoding="utf-8"?><D:sync-collection xmlns:D="DAV:"><D:sync-token></D:sync-token><D:sync-level>1</D:sync-level></D:sync-collection>'
 
-log "building native binary"
+log "building native contactd binary"
 (cd "${ROOT_DIR}" && go build -o "${BIN_PATH}" ./cmd/contactd)
 ln -sf "${BIN_PATH}" "${ADMIN_BIN_PATH}"
 

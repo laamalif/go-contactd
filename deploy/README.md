@@ -12,7 +12,7 @@
 
    `docker compose --env-file .env -f deploy/docker-compose.yml up -d --build`
 
-The container runs `contactd` (daemon mode) and persists SQLite data under `/data` (named volume `contactd-data`). The image also includes `contactctl` for admin operations.
+The container runs `contactd` (daemon mode) and persists SQLite data under `/data` (named volume `contactd-data`). The image also includes `contactctl` for admin operations. (`go-contactd` remains present as a compatibility alias inside the image.)
 
 ## Check health
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# davx5-sim.sh — Simulate a realistic DAVx5 sync session against go-contactd.
+# davx5-sim.sh — Simulate a realistic DAVx5 sync session against contactd.
 #
 # Reproduces the actual HTTP request sequence that DAVx5 (vCard 3.0 mode) sends
 # during account setup, initial sync, contact CRUD, and incremental sync.
@@ -27,7 +27,7 @@ SERVER_BASE_URL="${CONTACTD_BASE_URL:-}"
 STRICT_PLAN="${DAVX5_SIM_STRICT_PLAN:-0}"
 CURL_CONNECT_TIMEOUT="${DAVX5_SIM_CURL_CONNECT_TIMEOUT:-2}"
 CURL_MAX_TIME="${DAVX5_SIM_CURL_MAX_TIME:-10}"
-BIN="${TMP_DIR}/go-contactd"
+BIN="${TMP_DIR}/contactd"
 ADMIN_BIN="${TMP_DIR}/contactctl"
 DB="${TMP_DIR}/contactd.sqlite"
 LOG="${TMP_DIR}/server.log"
@@ -279,7 +279,7 @@ XMLEOF
 
 # ── build & start ────────────────────────────────────────────────────────────
 
-step "Building go-contactd"
+step "Building contactd"
   (cd "${ROOT_DIR}" && go build -o "${BIN}" ./cmd/contactd)
   ln -sf "${BIN}" "${ADMIN_BIN}"
 ok "binary built"

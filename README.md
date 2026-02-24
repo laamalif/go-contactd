@@ -2,6 +2,11 @@
 
 Minimal, container-ready CardDAV server for DAVx5 using Go + SQLite (WAL mode).
 
+Installed binary names use daemon-style naming:
+- `contactd` (daemon)
+- `contactctl` (admin utility)
+- `go-contactd` remains supported as a compatibility alias
+
 ## Status
 
 - Storage backend: SQLite only (`modernc.org/sqlite`)
@@ -14,13 +19,13 @@ Minimal, container-ready CardDAV server for DAVx5 using Go + SQLite (WAL mode).
 Build and run directly:
 
 ```bash
-docker build -t go-contactd .
+docker build -t contactd .
 docker run --rm \
   -p 8080:8080 \
   -e PORT=8080 \
   -e CONTACTD_DB_PATH=/data/contactd.sqlite \
   -v contactd-data:/data \
-  go-contactd
+  contactd
 ```
 
 Health checks:
@@ -71,7 +76,7 @@ Admin (`contactctl`) examples:
 - `contactctl user passwd (--username | --id) (--password | --password-stdin) [-d /path/to/db]`
 - `contactctl -V` print version and exit
 
-Compatibility (still supported, not preferred):
+Compatibility alias (still supported, not preferred):
 
 - `go-contactd serve ...`
 - `go-contactd user ...`
@@ -155,7 +160,7 @@ Current runtime logs are intentionally minimal (startup/listen/shutdown/error pa
 
 ## Reverse Proxy Guidance
 
-- Run `go-contactd` on internal HTTP only
+- Run `contactd` on internal HTTP only
 - Terminate TLS at nginx/Caddy/Traefik/HAProxy/ingress
 - Set public hostname/path at the proxy layer
 - Only set `CONTACTD_TRUST_PROXY_HEADERS=true` behind a trusted proxy boundary
@@ -247,7 +252,7 @@ Example unit (`/etc/systemd/system/contactd.service`):
 
 ```ini
 [Unit]
-Description=go-contactd CardDAV server
+Description=contactd CardDAV server
 After=network.target
 
 [Service]
