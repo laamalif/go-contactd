@@ -207,6 +207,58 @@ func TestHandler_CardPut_RejectsMissingOrUnsupportedContentType(t *testing.T) {
 	}
 }
 
+func TestHandler_Mkcol_Create201_And_Existing405(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	reqCreate := httptest.NewRequest("MKCOL", "/alice/friends/", nil)
+	reqCreate.SetBasicAuth("alice", "secret")
+	rrCreate := httptest.NewRecorder()
+	h.ServeHTTP(rrCreate, reqCreate)
+	if got, want := rrCreate.Code, http.StatusCreated; got != want {
+		t.Fatalf("MKCOL create status = %d, want %d body=%q", got, want, rrCreate.Body.String())
+	}
+
+	reqCreateAgain := httptest.NewRequest("MKCOL", "/alice/friends/", nil)
+	reqCreateAgain.SetBasicAuth("alice", "secret")
+	rrCreateAgain := httptest.NewRecorder()
+	h.ServeHTTP(rrCreateAgain, reqCreateAgain)
+	if got, want := rrCreateAgain.Code, http.StatusMethodNotAllowed; got != want {
+		t.Fatalf("MKCOL existing status = %d, want %d body=%q", got, want, rrCreateAgain.Body.String())
+	}
+
+	hasBook, err := store.HasAddressbook(context.Background(), "alice", "friends")
+	if err != nil {
+		t.Fatalf("HasAddressbook friends: %v", err)
+	}
+	if !hasBook {
+		t.Fatal("MKCOL did not persist addressbook")
+	}
+}
+
+func TestHandler_Mkcol_InvalidTargetPath_Rejected(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	for _, target := range []string{"/", "/alice/"} {
+		req := httptest.NewRequest("MKCOL", target, nil)
+		req.SetBasicAuth("alice", "secret")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if got, want := rr.Code, http.StatusNotFound; got != want {
+			t.Fatalf("MKCOL invalid target %q status = %d, want %d body=%q", target, got, want, rr.Body.String())
+		}
+	}
+}
+
 func TestHandler_CardPath_RejectsEncodedSlashInHref(t *testing.T) {
 	t.Parallel()
 
@@ -837,6 +889,51 @@ func TestHandler_Propfind_AddressbookExplicitExtensionProps(t *testing.T) {
 	}
 	if _, err := strconv.ParseInt(ctag, 10, 64); err != nil {
 		t.Fatalf("getctag = %q, want numeric revision string", ctag)
+	}
+}
+
+func TestHandler_Propfind_AddressbookSupportedAddressData_Explicit(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:prop>
+    <C:supported-address-data/>
+  </D:prop>
+</D:propfind>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND supported-address-data status = %d, want %d", got, want)
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "404 Not Found") {
+		t.Fatalf("PROPFIND supported-address-data unexpectedly 404: %q", body)
+	}
+	if !strings.Contains(body, "supported-address-data") || !strings.Contains(body, "address-data-type") {
+		t.Fatalf("PROPFIND supported-address-data missing property/type element: %q", body)
+	}
+	if !strings.Contains(body, `content-type="text/vcard"`) || !strings.Contains(body, `version="3.0"`) {
+		t.Fatalf("PROPFIND supported-address-data missing expected vcard type attrs: %q", body)
 	}
 }
 

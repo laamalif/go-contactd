@@ -96,6 +96,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "REPORT" && h.opts.Backend != nil:
 		h.handleReport(w, r)
 		return
+	case r.Method == "MKCOL" && h.opts.Backend != nil:
+		h.handleMkcol(w, r)
+		return
 	case h.opts.Backend != nil && isCardPath(r.URL.Path):
 		h.serveCardPath(w, r)
 		return
@@ -409,6 +412,27 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
 		return
 	}
+}
+
+func (h *handler) handleMkcol(w http.ResponseWriter, r *http.Request) {
+	if classifyDAVPath(r.URL.Path) != davResourceAddressbook {
+		http.NotFound(w, r)
+		return
+	}
+	user, slug, ok := parseAddressbookPath(r.URL.Path)
+	if !ok || user == "" || slug == "" {
+		http.NotFound(w, r)
+		return
+	}
+	ab := &gocarddav.AddressBook{
+		Path: r.URL.Path,
+		Name: slug,
+	}
+	if err := h.opts.Backend.CreateAddressBook(r.Context(), ab); err != nil {
+		writeBackendError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
 }
 
 func (h *handler) handleProppatch(w http.ResponseWriter, r *http.Request) {
@@ -748,6 +772,19 @@ func (h *handler) addressbookPropfindResponse(ctx context.Context, ab gocarddav.
 			}
 		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "supported-report-set"}):
 			okProp.SupportedReportSet = davxml.AddressbookSupportedReportSet(h.opts.Sync != nil)
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceCardDAV, Local: "supported-address-data"}):
+			if len(ab.SupportedAddressData) == 0 {
+				unknown = append(unknown, davxml.RawProp{XMLName: p})
+				continue
+			}
+			sad := &davxml.SupportedAddressData{}
+			for _, t := range ab.SupportedAddressData {
+				sad.Types = append(sad.Types, davxml.AddressDataType{
+					ContentType: t.ContentType,
+					Version:     t.Version,
+				})
+			}
+			okProp.SupportedAddressData = sad
 		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "displayname"}):
 			if ab.Name == "" {
 				unknown = append(unknown, davxml.RawProp{XMLName: p})
@@ -846,6 +883,7 @@ func hasAnyProp(p davxml.Prop) bool {
 		p.AddressbookHomeSet != nil ||
 		p.ResourceType != nil ||
 		p.SupportedReportSet != nil ||
+		p.SupportedAddressData != nil ||
 		p.DisplayName != "" ||
 		p.AddressbookDesc != "" ||
 		p.AddressbookColor != "" ||
@@ -874,6 +912,7 @@ func addressbookDefaultPropNames(includeExtensions, includeColor bool) []xml.Nam
 	out := []xml.Name{
 		{Space: davxml.NamespaceDAV, Local: "resourcetype"},
 		{Space: davxml.NamespaceDAV, Local: "supported-report-set"},
+		{Space: davxml.NamespaceCardDAV, Local: "supported-address-data"},
 	}
 	if includeExtensions {
 		out = append(out,

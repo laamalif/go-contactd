@@ -93,11 +93,15 @@ func (b *Backend) CreateAddressBook(ctx context.Context, addressBook *gocarddav.
 	if err != nil {
 		return mapStoreErr(err)
 	}
-	if _, _, err := b.store.EnsureAddressbook(ctx, userID, slug, defaultString(addressBook.Name, slug)); err != nil {
+	_, created, err := b.store.EnsureAddressbook(ctx, userID, slug, defaultString(addressBook.Name, slug))
+	if err != nil {
 		if isUniqueErr(err) {
 			return webdav.NewHTTPError(http.StatusMethodNotAllowed, err)
 		}
 		return mapStoreErr(err)
+	}
+	if !created {
+		return webdav.NewHTTPError(http.StatusMethodNotAllowed, fmt.Errorf("addressbook already exists"))
 	}
 	return nil
 }
