@@ -187,6 +187,7 @@ func runServeNamed(prog string, args []string, env map[string]string, stderr io.
 	var startupLogBuf bytes.Buffer
 	rt, err := prepareServeRuntime(context.Background(), args, env, &startupLogBuf)
 	if err != nil {
+		err = humanizeDBOpenError(extractDBPathForFatal(args, env), err)
 		if stderr != nil {
 			_, _ = fmt.Fprintf(stderr, "%s: %v\n", prog, err)
 		}
@@ -217,6 +218,44 @@ func runServeNamed(prog string, args []string, env map[string]string, stderr io.
 	stopPrune := startConfiguredPruneLoop(sigCtx, rt.store, rt.cfg, rt.logger)
 	defer stopPrune()
 	return serveHTTPGracefully(sigCtx, srv, rt.logger)
+}
+
+func extractDBPathForFatal(args []string, env map[string]string) string {
+	cfg, err := config.LoadServeConfig(args, env)
+	if err != nil {
+		// Fallback to the known default if even config parsing failed.
+		return "/var/db/contactd.db"
+	}
+	if strings.TrimSpace(cfg.DBPath) == "" {
+		return "/var/db/contactd.db"
+	}
+	return cfg.DBPath
+}
+
+func humanizeDBOpenError(dbPath string, err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "unable to open database file") {
+		return err
+	}
+
+	parent := filepath.Dir(dbPath)
+	if _, statErr := os.Stat(parent); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return fmt.Errorf("cannot open database %s: no such file or directory", dbPath)
+		}
+		if os.IsPermission(statErr) {
+			return fmt.Errorf("cannot open database %s: permission denied", dbPath)
+		}
+	}
+
+	// SQLite CANTOPEN (14) is often surfaced by modernc with misleading "out of memory (14)" text.
+	if strings.Contains(msg, "(14)") || strings.Contains(msg, "unable to open database file") {
+		return fmt.Errorf("cannot open database %s: permission denied", dbPath)
+	}
+	return err
 }
 
 type serveHTTPServer interface {

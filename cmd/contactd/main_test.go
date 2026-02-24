@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -401,11 +402,21 @@ func TestRunMain_StartupFailure_NoDuplicateStructuredLog(t *testing.T) {
 		t.Fatalf("runMain startup failure code = %d, want 2", code)
 	}
 	out := stderr.String()
-	if !strings.Contains(out, "go-contactd: open db:") {
+	if !strings.Contains(out, "go-contactd: cannot open database ") {
 		t.Fatalf("stderr = %q, want daemon-style open db error", out)
 	}
 	if strings.Contains(out, `event="db error"`) || strings.Contains(out, `level=ERROR`) {
 		t.Fatalf("stderr should not include structured startup log duplicate, got %q", out)
+	}
+}
+
+func TestHumanizeDBOpenError_SQLiteCantOpen14_Normalized(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "contactd.db")
+	err := humanizeDBOpenError(dbPath, errors.New(`apply pragma "PRAGMA foreign_keys = ON;": unable to open database file: out of memory (14)`))
+	if got := err.Error(); got != fmt.Sprintf("cannot open database %s: permission denied", dbPath) {
+		t.Fatalf("humanizeDBOpenError = %q", got)
 	}
 }
 
