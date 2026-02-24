@@ -166,11 +166,7 @@ func (h *handler) handlePropfind(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.opts.RequestMaxBytes)
 	reqSpec, err := parsePropfindRequest(r.Body)
 	if err != nil {
-		if isMaxBytesError(err) {
-			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
-			return
-		}
-		http.Error(w, "invalid xml", http.StatusBadRequest)
+		_ = writeInvalidBodyOrTooLarge(w, err, "invalid xml")
 		return
 	}
 
@@ -283,11 +279,7 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 		} `xml:"limit"`
 	}
 	if err := xml.NewDecoder(r.Body).Decode(&envelope); err != nil {
-		if isMaxBytesError(err) {
-			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
-			return
-		}
-		http.Error(w, "invalid xml", http.StatusBadRequest)
+		_ = writeInvalidBodyOrTooLarge(w, err, "invalid xml")
 		return
 	}
 
@@ -724,11 +716,7 @@ func (h *handler) handleCardPut(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.opts.RequestMaxBytes)
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		if isMaxBytesError(err) {
-			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
-			return
-		}
-		http.Error(w, "invalid vcard", http.StatusBadRequest)
+		_ = writeInvalidBodyOrTooLarge(w, err, "invalid vcard")
 		return
 	}
 	if int64(len(raw)) > h.opts.VCardMaxBytes {
@@ -808,6 +796,18 @@ func parseAddressbookPath(p string) (user, slug string, ok bool) {
 func isMaxBytesError(err error) bool {
 	var mbe *http.MaxBytesError
 	return errors.As(err, &mbe)
+}
+
+func writeInvalidBodyOrTooLarge(w http.ResponseWriter, err error, badRequestMsg string) bool {
+	if err == nil {
+		return false
+	}
+	if isMaxBytesError(err) {
+		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+		return true
+	}
+	http.Error(w, badRequestMsg, http.StatusBadRequest)
+	return true
 }
 
 func validateRequestPathPayload(u *url.URL) error {
