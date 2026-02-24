@@ -875,6 +875,9 @@ func parsePropfindDepth(w http.ResponseWriter, r *http.Request) (int, bool) {
 }
 
 func (h *handler) buildPropfindMultiStatus(ctx context.Context, p string, depth int, req propfindRequest) (davxml.MultiStatus, error) {
+	if strings.TrimSpace(p) == "/" {
+		return h.propfindRoot(ctx, depth, req)
+	}
 	switch classifyDAVPath(p) {
 	case davResourcePrincipal:
 		return h.propfindPrincipal(ctx, p, depth, req)
@@ -885,6 +888,22 @@ func (h *handler) buildPropfindMultiStatus(ctx context.Context, p string, depth 
 	default:
 		return davxml.MultiStatus{}, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("resource not found"))
 	}
+}
+
+func (h *handler) propfindRoot(ctx context.Context, depth int, req propfindRequest) (davxml.MultiStatus, error) {
+	principal, err := h.opts.Backend.CurrentUserPrincipal(ctx)
+	if err != nil {
+		return davxml.MultiStatus{}, err
+	}
+	responses := []davxml.Response{rootPropfindResponse("/", principal, req)}
+	if depth == 1 {
+		pms, err := h.propfindPrincipal(ctx, principal, 0, req)
+		if err != nil {
+			return davxml.MultiStatus{}, err
+		}
+		responses = append(responses, pms.Responses...)
+	}
+	return davxml.MultiStatus{Responses: responses}, nil
 }
 
 type davResourceKind int
@@ -993,6 +1012,24 @@ func principalPropfindResponse(href string, req propfindRequest) davxml.Response
 				Collection: davxml.DAVCollection(),
 				Principal:  davxml.DAVPrincipal(),
 			}
+		default:
+			unknown = append(unknown, davxml.RawProp{XMLName: p})
+		}
+	}
+	return davxml.Response{Href: href, PropStats: buildPropstats(okProp, unknown)}
+}
+
+func rootPropfindResponse(href, principal string, req propfindRequest) davxml.Response {
+	okProp := davxml.Prop{}
+	var unknown []davxml.RawProp
+	for _, p := range expandPropfindRequestedProps(req, rootDefaultPropNames()) {
+		switch {
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "current-user-principal"}):
+			okProp.CurrentUserPrincipal = &davxml.Href{Href: principal}
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceCardDAV, Local: "addressbook-home-set"}):
+			okProp.AddressbookHomeSet = &davxml.Href{Href: principal}
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "resourcetype"}):
+			okProp.ResourceType = &davxml.ResourceType{Collection: davxml.DAVCollection()}
 		default:
 			unknown = append(unknown, davxml.RawProp{XMLName: p})
 		}
@@ -1189,6 +1226,14 @@ func principalDefaultPropNames() []xml.Name {
 		{Space: davxml.NamespaceDAV, Local: "principal-URL"},
 		{Space: davxml.NamespaceCardDAV, Local: "addressbook-home-set"},
 		{Space: davxml.NamespaceDAV, Local: "resourcetype"},
+	}
+}
+
+func rootDefaultPropNames() []xml.Name {
+	return []xml.Name{
+		{Space: davxml.NamespaceDAV, Local: "resourcetype"},
+		{Space: davxml.NamespaceDAV, Local: "current-user-principal"},
+		{Space: davxml.NamespaceCardDAV, Local: "addressbook-home-set"},
 	}
 }
 

@@ -1195,6 +1195,48 @@ func TestHandler_Propfind_PrincipalDepth0And1(t *testing.T) {
 	}
 }
 
+func TestHandler_Propfind_RootDiscoveryDepth0_ReturnsCurrentUserPrincipal(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	reqBody := `<?xml version="1.0" encoding="UTF-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:CARD="urn:ietf:params:xml:ns:carddav">
+  <D:prop>
+    <D:resourcetype/>
+    <D:displayname/>
+    <D:current-user-principal/>
+    <CARD:addressbook-home-set/>
+    <CARD:addressbook-description/>
+  </D:prop>
+</D:propfind>`
+	req := httptest.NewRequest("PROPFIND", "/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND / status=%d want %d body=%q", got, want, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`<href>/</href>`,
+		`current-user-principal`,
+		`/alice/`,
+		`addressbook-home-set`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("PROPFIND / body missing %q: %q", want, body)
+		}
+	}
+}
+
 func TestHandler_Propfind_AddressbookAndCardDepthHandling(t *testing.T) {
 	t.Parallel()
 
