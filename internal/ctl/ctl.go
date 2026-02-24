@@ -650,11 +650,12 @@ func runImport(args []string, env map[string]string, stdout, stderr io.Writer) i
 		_, _ = fmt.Fprintf(stderr, "io error: stat import path: %v\n", err)
 		return 1
 	}
+	vcardMaxBytes := int(config.DefaultVCardMaxBytes)
 	var created, updated int
 	if st.IsDir() {
-		created, updated, err = importFromDir(context.Background(), store, ab.ID, srcPath, dryRun)
+		created, updated, err = importFromDir(context.Background(), store, ab.ID, srcPath, dryRun, vcardMaxBytes)
 	} else {
-		created, updated, err = importFromConcatFile(context.Background(), store, ab.ID, srcPath, dryRun)
+		created, updated, err = importFromConcatFile(context.Background(), store, ab.ID, srcPath, dryRun, vcardMaxBytes)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "import error: %v\n", err)
@@ -668,7 +669,7 @@ func runImport(args []string, env map[string]string, stdout, stderr io.Writer) i
 	return 0
 }
 
-func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, dir string, dryRun bool) (int, int, error) {
+func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, dir string, dryRun bool, vcardMaxBytes int) (int, int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return 0, 0, fmt.Errorf("read import dir: %w", err)
@@ -696,6 +697,9 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 		if err != nil {
 			return 0, 0, fmt.Errorf("read import file %s: %w", name, err)
 		}
+		if err := validateImportedVCardSize(raw, vcardMaxBytes); err != nil {
+			return 0, 0, fmt.Errorf("import file %s: %w", name, err)
+		}
 		card, err := decodeSingleCardBytes(raw)
 		if err != nil {
 			return 0, 0, fmt.Errorf("decode import file %s: %w", name, err)
@@ -717,7 +721,7 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 	return created, updated, nil
 }
 
-func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID int64, path string, dryRun bool) (int, int, error) {
+func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID int64, path string, dryRun bool, vcardMaxBytes int) (int, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, 0, fmt.Errorf("open import file: %w", err)
@@ -738,13 +742,21 @@ func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID in
 			return 0, 0, fmt.Errorf("decode import file: missing UID")
 		}
 		href := uid + ".vcf"
-		var raw []byte
-		if !dryRun {
-			var buf bytes.Buffer
-			if err := vcard.NewEncoder(&buf).Encode(card); err != nil {
-				return 0, 0, fmt.Errorf("encode imported card %s: %w", uid, err)
-			}
-			raw = buf.Bytes()
+		safeHref, err := safeExportCardFilename(href)
+		if err != nil {
+			return 0, 0, err
+		}
+		href = safeHref
+		var buf bytes.Buffer
+		if err := vcard.NewEncoder(&buf).Encode(card); err != nil {
+			return 0, 0, fmt.Errorf("encode imported card %s: %w", uid, err)
+		}
+		raw := buf.Bytes()
+		if err := validateImportedVCardSize(raw, vcardMaxBytes); err != nil {
+			return 0, 0, fmt.Errorf("put card %s: %w", uid, err)
+		}
+		if dryRun {
+			raw = nil
 		}
 		res, err := putOrClassifyImportedCard(ctx, store, addressbookID, href, uid, raw, dryRun)
 		if err != nil {
@@ -757,6 +769,16 @@ func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID in
 		}
 	}
 	return created, updated, nil
+}
+
+func validateImportedVCardSize(raw []byte, maxBytes int) error {
+	if maxBytes <= 0 {
+		return nil
+	}
+	if len(raw) > maxBytes {
+		return fmt.Errorf("vcard too large: %d bytes exceeds max %d", len(raw), maxBytes)
+	}
+	return nil
 }
 
 func putOrClassifyImportedCard(ctx context.Context, store *db.Store, addressbookID int64, href, uid string, raw []byte, dryRun bool) (db.PutCardResult, error) {

@@ -2837,6 +2837,67 @@ func TestHandler_Report_SyncCollection_EmptyTokenReturnsSyncTokenAndItems(t *tes
 	}
 }
 
+func TestHandler_Report_SyncCollection_EmptyTokenLimitPaginatesAndReturns507(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	for _, tc := range []struct {
+		href string
+		uid  string
+		name string
+	}{
+		{href: "/alice/contacts/a.vcf", uid: "uid-a", name: "Alice A"},
+		{href: "/alice/contacts/b.vcf", uid: "uid-b", name: "Bob B"},
+		{href: "/alice/contacts/c.vcf", uid: "uid-c", name: "Carol C"},
+	} {
+		if _, err := backend.PutAddressObject(ctx, tc.href, mustSampleCard(tc.uid, tc.name), &gocarddav.PutAddressObjectOptions{}); err != nil {
+			t.Fatalf("seed PutAddressObject %s: %v", tc.href, err)
+		}
+	}
+
+	svc := carddavx.NewSyncService(store)
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            svc,
+	})
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:sync-collection xmlns:D="DAV:">
+  <D:sync-token></D:sync-token>
+  <D:sync-level>1</D:sync-level>
+  <D:limit><D:nresults>1</D:nresults></D:limit>
+</D:sync-collection>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("sync-collection empty token limit status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	doc := mustParseSyncMultiStatus(t, rr.Body.Bytes())
+	if got, want := countNonSelfSyncResponses(doc, "/alice/contacts/"), 1; got != want {
+		t.Fatalf("empty token limit item responses = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	if !hasSyncStatusForHref(doc, "/alice/contacts/", http.StatusInsufficientStorage) {
+		t.Fatalf("empty token limit missing self 507 response body=%q", rr.Body.String())
+	}
+	tok, err := carddavx.ParseSyncToken(doc.SyncToken)
+	if err != nil {
+		t.Fatalf("ParseSyncToken response: %v token=%q body=%q", err, doc.SyncToken, rr.Body.String())
+	}
+	if got, want := tok.Revision, int64(1); got != want {
+		t.Fatalf("empty token limit sync token revision = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+}
+
 func TestHandler_Report_SyncCollection_CrossUserReturns404(t *testing.T) {
 	t.Parallel()
 

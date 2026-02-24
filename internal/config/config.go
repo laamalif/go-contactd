@@ -25,6 +25,7 @@ const (
 )
 
 const DefaultDBPath = defaultDBPath
+const DefaultVCardMaxBytes = defaultVCardMaxBytes
 
 type SeedUser struct {
 	Username     string

@@ -54,6 +54,12 @@ type CardChange struct {
 	Revision int64
 }
 
+type CardSyncState struct {
+	Href     string
+	ETagHex  string
+	Revision int64
+}
+
 type User struct {
 	ID       int64
 	Username string
@@ -564,6 +570,42 @@ func (s *Store) ListCardChangesSince(ctx context.Context, addressbookID int64, a
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate card_changes since: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) ListCurrentCardSyncStates(ctx context.Context, addressbookID int64, limit int) ([]CardSyncState, error) {
+	query := `
+		SELECT c.href, c.etag, MAX(cc.revision) AS revision
+		FROM cards c
+		JOIN card_changes cc
+		  ON cc.addressbook_id = c.addressbook_id
+		 AND cc.href = c.href
+		WHERE c.addressbook_id = ?
+		GROUP BY c.id, c.href, c.etag
+		ORDER BY revision ASC, c.href ASC
+	`
+	args := []any{addressbookID}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list current card sync states: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []CardSyncState
+	for rows.Next() {
+		var c CardSyncState
+		if err := rows.Scan(&c.Href, &c.ETagHex, &c.Revision); err != nil {
+			return nil, fmt.Errorf("scan current card sync state: %w", err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate current card sync states: %w", err)
 	}
 	return out, nil
 }

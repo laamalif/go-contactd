@@ -107,18 +107,34 @@ func (s *SyncService) SyncCollection(ctx context.Context, username, slug, rawTok
 	if err != nil {
 		return SyncResult{}, err
 	}
-	currentToken := FormatSyncToken(ab.ID, ab.Revision)
-
 	if strings.TrimSpace(rawToken) == "" {
-		cards, err := s.store.ListCards(ctx, ab.ID)
+		stateLimit := 0
+		if limit > 0 {
+			// Ask for one extra row so we can detect truncation and emit a continuation token.
+			stateLimit = limit + 1
+		}
+		states, err := s.store.ListCurrentCardSyncStates(ctx, ab.ID, stateLimit)
 		if err != nil {
 			return SyncResult{}, err
 		}
-		out := SyncResult{
-			SyncToken: currentToken,
-			Updated:   make([]SyncRef, 0, len(cards)),
+		truncated := false
+		if limit > 0 && len(states) > limit {
+			truncated = true
+			states = states[:limit]
 		}
-		for _, c := range cards {
+		tokenRevision := ab.Revision
+		if truncated && len(states) > 0 {
+			lastRevision := states[len(states)-1].Revision
+			if lastRevision < tokenRevision {
+				tokenRevision = lastRevision
+			}
+		}
+		out := SyncResult{
+			SyncToken: FormatSyncToken(ab.ID, tokenRevision),
+			Updated:   make([]SyncRef, 0, len(states)),
+			Truncated: truncated,
+		}
+		for _, c := range states {
 			out.Updated = append(out.Updated, SyncRef{
 				Href: "/" + username + "/" + slug + "/" + c.Href,
 				ETag: `"` + c.ETagHex + `"`,

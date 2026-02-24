@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/laamalif/go-contactd/internal/config"
 	"github.com/laamalif/go-contactd/internal/db"
 )
 
@@ -311,6 +312,82 @@ func TestRunCLI_ImportConcatFile_UsesUIDForHref(t *testing.T) {
 	}
 	if cards[0].Href != "uid-a.vcf" || cards[1].Href != "uid-z.vcf" {
 		t.Fatalf("hrefs=%q,%q want uid-a.vcf,uid-z.vcf", cards[0].Href, cards[1].Href)
+	}
+}
+
+func TestRunCLI_ImportConcatFile_InvalidUIDHrefReturnsError(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedEmptyImportTestDB(t)
+	srcFile := filepath.Join(t.TempDir(), "contacts.vcf")
+	raw := "" +
+		"BEGIN:VCARD\r\nVERSION:3.0\r\nUID:bad/uid\r\nFN:Bad UID\r\nEND:VCARD\r\n"
+	if err := os.WriteFile(srcFile, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile contacts.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"import",
+		"--username", "alice",
+		"-d", dbPath,
+		srcFile,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 1 {
+		t.Fatalf("code=%d want 1 stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "import error:") || !strings.Contains(got, "invalid card href") {
+		t.Fatalf("stderr=%q want invalid href import error", got)
+	}
+
+	store, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("db.Open verify: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), "alice", "contacts")
+	if err != nil {
+		t.Fatalf("GetAddressbookByUsernameSlug: %v", err)
+	}
+	cards, err := store.ListCards(context.Background(), ab.ID)
+	if err != nil {
+		t.Fatalf("ListCards: %v", err)
+	}
+	if len(cards) != 0 {
+		t.Fatalf("cards len=%d want 0", len(cards))
+	}
+}
+
+func TestRunCLI_ImportConcatFile_OversizeVCardReturnsError(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedEmptyImportTestDB(t)
+	srcFile := filepath.Join(t.TempDir(), "contacts.vcf")
+	oversize := int(config.DefaultVCardMaxBytes) + 1024
+	raw := "" +
+		"BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-big\r\nFN:Big\r\nNOTE:" + strings.Repeat("A", oversize) + "\r\nEND:VCARD\r\n"
+	if err := os.WriteFile(srcFile, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile contacts.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"import",
+		"--username", "alice",
+		"-d", dbPath,
+		srcFile,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 1 {
+		t.Fatalf("code=%d want 1 stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "import error:") || !strings.Contains(got, "vcard too large") {
+		t.Fatalf("stderr=%q want oversize import error", got)
 	}
 }
 
