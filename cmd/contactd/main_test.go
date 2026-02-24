@@ -273,7 +273,7 @@ func TestRunMain_Version_NoDaemonAccessLogs(t *testing.T) {
 	}
 }
 
-func TestRunMain_RootHelpFlagsAndSubcommand(t *testing.T) {
+func TestRunMain_DaemonRootHelp(t *testing.T) {
 	t.Parallel()
 
 	cases := [][]string{
@@ -292,11 +292,11 @@ func TestRunMain_RootHelpFlagsAndSubcommand(t *testing.T) {
 				t.Fatalf("runMain(%v) code = %d, want 0 stderr=%q", args, code, stderr.String())
 			}
 			out := stdout.String()
-			if !strings.Contains(out, "usage: go-contactd <subcommand>") {
+			if !strings.Contains(out, "usage: go-contactd [flags]") {
 				t.Fatalf("stdout missing root usage: %q", out)
 			}
-			if !strings.Contains(out, "serve") || !strings.Contains(out, "user") || !strings.Contains(out, "version") {
-				t.Fatalf("stdout missing subcommand list: %q", out)
+			if !strings.Contains(out, "--listen-addr") || !strings.Contains(out, "--db-path") || !strings.Contains(out, "contactctl user") {
+				t.Fatalf("stdout missing daemon/help details: %q", out)
 			}
 			if got := stderr.String(); got != "" {
 				t.Fatalf("stderr = %q, want empty", got)
@@ -305,7 +305,7 @@ func TestRunMain_RootHelpFlagsAndSubcommand(t *testing.T) {
 	}
 }
 
-func TestRunMain_UserHelpFlagsAndSubcommand(t *testing.T) {
+func TestRunMain_ContactctlUserHelpFlagsAndSubcommand(t *testing.T) {
 	t.Parallel()
 
 	cases := [][]string{
@@ -319,12 +319,12 @@ func TestRunMain_UserHelpFlagsAndSubcommand(t *testing.T) {
 			t.Parallel()
 
 			var stdout, stderr bytes.Buffer
-			code := runMain(args, map[string]string{}, &stdout, &stderr)
+			code := runMainProgramWithInput("contactctl", args, map[string]string{}, strings.NewReader(""), &stdout, &stderr)
 			if code != 0 {
-				t.Fatalf("runMain(%v) code = %d, want 0 stderr=%q", args, code, stderr.String())
+				t.Fatalf("runMainProgramWithInput(contactctl,%v) code = %d, want 0 stderr=%q", args, code, stderr.String())
 			}
 			out := stdout.String()
-			if !strings.Contains(out, "usage: go-contactd user <add|list|delete|passwd>") {
+			if !strings.Contains(out, "usage: contactctl user <add|list|delete|passwd>") {
 				t.Fatalf("stdout missing user usage: %q", out)
 			}
 			if !strings.Contains(out, "password-stdin") {
@@ -350,7 +350,7 @@ func TestRunMain_ServeHelpFlagPrintsHelp(t *testing.T) {
 				t.Fatalf("runMain(%v) code = %d, want 0; stderr=%q", args, code, stderr.String())
 			}
 			out := stdout.String()
-			if !strings.Contains(out, "usage: go-contactd serve [flags]") {
+			if !strings.Contains(out, "usage: go-contactd [flags]") {
 				t.Fatalf("stdout missing serve usage: %q", out)
 			}
 			if !strings.Contains(out, "--listen-addr") || !strings.Contains(out, "--port") || !strings.Contains(out, "--db-path") {
@@ -360,6 +360,48 @@ func TestRunMain_ServeHelpFlagPrintsHelp(t *testing.T) {
 				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
 		})
+	}
+}
+
+func TestRunMain_NoArgsDefaultsToServe(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := runMain(nil, map[string]string{"CONTACTD_DB_PATH": t.TempDir()}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("runMain(no args) code = %d, want 2 startup failure from serve path", code)
+	}
+	if got := stderr.String(); !strings.Contains(got, "startup error:") {
+		t.Fatalf("stderr = %q, want startup error (daemon dispatch path)", got)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+}
+
+func TestRunMain_FlagArgsDispatchToServe(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := runMain([]string{"-d", t.TempDir()}, map[string]string{}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("runMain(-d <dir>) code = %d, want 2 startup failure from serve path", code)
+	}
+	if got := stderr.String(); !strings.Contains(got, "startup error:") {
+		t.Fatalf("stderr = %q, want startup error (serve dispatch)", got)
+	}
+}
+
+func TestRunMain_ContactctlHelp(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := runMainProgramWithInput("contactctl", []string{"--help"}, map[string]string{}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("contactctl --help code = %d, want 0 stderr=%q", code, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "usage: contactctl user <add|list|delete|passwd>") {
+		t.Fatalf("contactctl help stdout = %q, want user usage", got)
 	}
 }
 

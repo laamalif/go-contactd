@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -26,7 +27,7 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(filepath.Base(os.Args[0]), os.Args[1:], os.Stdout, os.Stderr))
 }
 
 var (
@@ -35,62 +36,102 @@ var (
 	buildDate = "unknown"
 )
 
-func run(args []string, stdout, stderr *os.File) int {
-	return runMainWithInput(args, currentEnvMap(), os.Stdin, stdout, stderr)
+func run(prog string, args []string, stdout, stderr *os.File) int {
+	return runMainProgramWithInput(prog, args, currentEnvMap(), os.Stdin, stdout, stderr)
 }
 
 func runMain(args []string, env map[string]string, stdout, stderr io.Writer) int {
-	return runMainWithInput(args, env, os.Stdin, stdout, stderr)
+	return runMainProgramWithInput("go-contactd", args, env, os.Stdin, stdout, stderr)
 }
 
 func runMainWithInput(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runMainProgramWithInput("go-contactd", args, env, stdin, stdout, stderr)
+}
+
+func runMainProgramWithInput(prog string, args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
+	base := filepath.Base(prog)
+	if cliModeForProgram(base) == cliModeAdmin {
+		return runAdminCLI(base, args, env, stdin, stdout, stderr)
+	}
+	return runDaemonCLI(base, args, env, stdin, stdout, stderr)
+}
+
+type cliMode int
+
+const (
+	cliModeDaemon cliMode = iota
+	cliModeAdmin
+)
+
+func cliModeForProgram(base string) cliMode {
+	switch base {
+	case "contactctl":
+		return cliModeAdmin
+	default:
+		return cliModeDaemon
+	}
+}
+
+func runDaemonCLI(prog string, args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		printRootUsage(stderr)
+		return runServe(nil, env, stderr)
+	}
+	if args[0] == "--version" || args[0] == "-V" {
+		return runVersion(nil, stdout, stderr)
+	}
+	if isHelpToken(args[0]) || args[0] == "help" {
+		printDaemonHelp(stdout, prog)
+		return 0
+	}
+	if strings.HasPrefix(args[0], "-") {
+		if containsHelpToken(args) {
+			printDaemonHelp(stdout, prog)
+			return 0
+		}
+		return runServe(args, env, stderr)
+	}
+
+	switch args[0] {
+	case "serve": // backward compatibility alias (undocumented)
+		if containsHelpToken(args[1:]) {
+			printDaemonHelp(stdout, prog)
+			return 0
+		}
+		return runServe(args[1:], env, stderr)
+	case "version": // backward compatibility alias (undocumented)
+		return runVersion(args[1:], stdout, stderr)
+	case "user": // backward compatibility alias (undocumented); prefer contactctl
+		return runUser(args[1:], env, stdin, stdout, stderr)
+	default:
+		_, _ = fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
+		if args[0] == "server" {
+			_, _ = fmt.Fprintf(stderr, "did you mean: serve (compat alias) or just run %s [flags]?\n", prog)
+		}
+		printDaemonUsage(stderr, prog)
+		return 2
+	}
+}
+
+func runAdminCLI(prog string, args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		printAdminUsage(stderr, prog)
 		return 2
 	}
 	if args[0] == "--version" || args[0] == "-V" {
 		return runVersion(nil, stdout, stderr)
 	}
-	if isHelpToken(args[0]) {
-		printRootHelp(stdout)
+	if isHelpToken(args[0]) || args[0] == "help" {
+		printAdminHelp(stdout, prog)
 		return 0
 	}
-	if args[0] == "help" {
-		if len(args) == 1 {
-			printRootHelp(stdout)
-			return 0
-		}
-		switch args[1] {
-		case "user":
-			printUserHelp(stdout)
-			return 0
-		case "version":
-			printVersionHelp(stdout)
-			return 0
-		case "serve":
-			printServeHelp(stdout)
-			return 0
-		default:
-			_, _ = fmt.Fprintf(stderr, "unknown subcommand: %s\n", args[1])
-			printRootUsage(stderr)
-			return 2
-		}
-	}
-
 	switch args[0] {
-	case "serve":
-		if len(args) > 1 && (isHelpToken(args[1]) || args[1] == "help") {
-			printServeHelp(stdout)
-			return 0
-		}
-		return runServe(args[1:], env, stderr)
 	case "user":
 		return runUser(args[1:], env, stdin, stdout, stderr)
 	case "version":
 		return runVersion(args[1:], stdout, stderr)
 	default:
-		_, _ = fmt.Fprintf(stderr, "unknown subcommand: %s\n", args[0])
-		printRootUsage(stderr)
+		_, _ = fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
+		printAdminUsage(stderr, prog)
 		return 2
 	}
 }
@@ -251,27 +292,71 @@ func isHelpToken(s string) bool {
 	return s == "-h" || s == "--help"
 }
 
-func printRootUsage(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: go-contactd <subcommand>")
+func containsHelpToken(args []string) bool {
+	for _, arg := range args {
+		if isHelpToken(arg) || arg == "help" {
+			return true
+		}
+	}
+	return false
 }
 
-func printRootHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: go-contactd <subcommand>")
+func printDaemonUsage(w io.Writer, prog string) {
+	_, _ = fmt.Fprintf(w, "usage: %s [flags]\n", prog)
+}
+
+func printDaemonHelp(w io.Writer, prog string) {
+	_, _ = fmt.Fprintf(w, "usage: %s [flags]\n", prog)
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "subcommands:")
-	_, _ = fmt.Fprintln(w, "  serve    start the CardDAV HTTP service")
-	_, _ = fmt.Fprintln(w, "  user     manage users")
-	_, _ = fmt.Fprintln(w, "  version  print build metadata")
+	_, _ = fmt.Fprintln(w, "flags:")
+	_, _ = fmt.Fprintln(w, `  -l, --listen-addr addr       listen address (default ":8080")`)
+	_, _ = fmt.Fprintln(w, "      --listen addr            alias for --listen-addr")
+	_, _ = fmt.Fprintln(w, "      --bind addr              alias for --listen-addr")
+	_, _ = fmt.Fprintln(w, "      --addr addr              alias for --listen-addr")
+	_, _ = fmt.Fprintln(w, "  -p, --port port             listen on :PORT (cannot combine with -l/--listen-addr)")
+	_, _ = fmt.Fprintln(w, `  -d, --db-path path          sqlite database path (default "/var/db/contactd.db")`)
+	_, _ = fmt.Fprintln(w, "      --db path               alias for --db-path")
+	_, _ = fmt.Fprintln(w, "      --base-url url          public base URL for redirects")
+	_, _ = fmt.Fprintln(w, "      --log-level level       log level: debug|info|warn|error")
+	_, _ = fmt.Fprintln(w, "      --log-format fmt        log format: text|json")
+	_, _ = fmt.Fprintln(w, "      --trust-proxy-headers   trust X-Forwarded-* headers")
+	_, _ = fmt.Fprintln(w, "  -V, --version               print version and exit")
+	_, _ = fmt.Fprintln(w, "  -h, --help                  print help and exit")
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "run 'go-contactd help <subcommand>' for more details")
+	_, _ = fmt.Fprintln(w, "environment:")
+	_, _ = fmt.Fprintln(w, "  CONTACTD_LISTEN_ADDR, CONTACTD_DB_PATH, CONTACTD_LOG_LEVEL, ...")
+	_, _ = fmt.Fprintln(w, "  flags override environment; environment overrides defaults")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "admin commands:")
+	_, _ = fmt.Fprintln(w, "  use contactctl user <add|list|delete|passwd>")
+}
+
+func printAdminUsage(w io.Writer, prog string) {
+	_, _ = fmt.Fprintf(w, "usage: %s user <add|list|delete|passwd>\n", prog)
+}
+
+func printAdminHelp(w io.Writer, prog string) {
+	_, _ = fmt.Fprintf(w, "usage: %s user <add|list|delete|passwd>\n", prog)
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "commands:")
+	_, _ = fmt.Fprintln(w, "  user add      create user")
+	_, _ = fmt.Fprintln(w, "  user list     list users")
+	_, _ = fmt.Fprintln(w, "  user delete   delete user")
+	_, _ = fmt.Fprintln(w, "  user passwd   change user password")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "run 'contactctl user -h' for user subcommand help")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "flags:")
+	_, _ = fmt.Fprintln(w, "  -V, --version  print version and exit")
+	_, _ = fmt.Fprintln(w, "  -h, --help     print help and exit")
 }
 
 func printUserUsage(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: go-contactd user <add|list|delete|passwd>")
+	_, _ = fmt.Fprintln(w, "usage: contactctl user <add|list|delete|passwd>")
 }
 
 func printUserHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: go-contactd user <add|list|delete|passwd>")
+	_, _ = fmt.Fprintln(w, "usage: contactctl user <add|list|delete|passwd>")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "subcommands:")
 	_, _ = fmt.Fprintln(w, "  add     create a user (use --password-stdin to avoid argv leaks)")
@@ -284,39 +369,27 @@ func printUserHelp(w io.Writer) {
 }
 
 func printVersionHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: go-contactd version [--format text|json]")
+	_, _ = fmt.Fprintln(w, "usage: version [--format text|json]")
 }
 
 func printServeHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: go-contactd serve [flags]")
-	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "common flags:")
-	_, _ = fmt.Fprintln(w, "  --listen-addr <addr>   canonical listen address (aliases: --listen, --bind, --addr)")
-	_, _ = fmt.Fprintln(w, "  --port <n>             convenience port (conflicts with --listen-addr and aliases)")
-	_, _ = fmt.Fprintln(w, "  --db-path <path>       sqlite db path (alias: --db)")
-	_, _ = fmt.Fprintln(w, "  --base-url <url>       absolute redirect base URL (alias: --url)")
-	_, _ = fmt.Fprintln(w, "  --log-level <level>    debug|info|warn|error (alias: --level)")
-	_, _ = fmt.Fprintln(w, "  --log-format <fmt>     text|json")
-	_, _ = fmt.Fprintln(w, "  --trust-proxy-headers  trust X-Forwarded-* (alias: --trust-proxy)")
-	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "config precedence: flags > env vars > defaults")
-	_, _ = fmt.Fprintln(w, "see README.md for full env/flag reference")
+	printDaemonHelp(w, "contactd")
 }
 
 func printUserAddHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: go-contactd user add --username <name> (--password <pw> | --password-stdin) [--db-path <path>|--db <path>] [--default-book-slug <slug>] [--default-book-name <name>]")
+	_, _ = fmt.Fprintln(w, "usage: contactctl user add --username <name> (--password <pw> | --password-stdin) [--db-path <path>|--db <path>|-d <path>] [--default-book-slug <slug>] [--default-book-name <name>]")
 }
 
 func printUserListHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: go-contactd user list [--db-path <path>|--db <path>] [--format table|json]")
+	_, _ = fmt.Fprintln(w, "usage: contactctl user list [--db-path <path>|--db <path>|-d <path>] [--format table|json]")
 }
 
 func printUserDeleteHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: go-contactd user delete (--username <name> | --id <id>) [--db-path <path>|--db <path>]")
+	_, _ = fmt.Fprintln(w, "usage: contactctl user delete (--username <name> | --id <id>) [--db-path <path>|--db <path>|-d <path>]")
 }
 
 func printUserPasswdHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: go-contactd user passwd (--username <name> | --id <id>) (--password <pw> | --password-stdin) [--db-path <path>|--db <path>]")
+	_, _ = fmt.Fprintln(w, "usage: contactctl user passwd (--username <name> | --id <id>) (--password <pw> | --password-stdin) [--db-path <path>|--db <path>|-d <path>]")
 }
 
 const defaultCLIDBPath = "/var/db/contactd.db"
@@ -337,6 +410,7 @@ func runUserAdd(args []string, env map[string]string, stdin io.Reader, stdout, s
 	)
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
 	fs.StringVar(&dbPath, "db", dbPath, "alias for --db-path")
+	fs.StringVar(&dbPath, "d", dbPath, "alias for --db-path")
 	fs.StringVar(&username, "username", "", "username")
 	fs.StringVar(&password, "password", "", "password")
 	fs.BoolVar(&pwStdin, "password-stdin", false, "read password from stdin (safer than argv)")
@@ -401,6 +475,7 @@ func runUserList(args []string, env map[string]string, stdout, stderr io.Writer)
 	format := "table"
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
 	fs.StringVar(&dbPath, "db", dbPath, "alias for --db-path")
+	fs.StringVar(&dbPath, "d", dbPath, "alias for --db-path")
 	fs.StringVar(&format, "format", format, "table|json")
 	if err := fs.Parse(args); err != nil {
 		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
@@ -463,6 +538,7 @@ func runUserDelete(args []string, env map[string]string, stdout, stderr io.Write
 	var id int64
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
 	fs.StringVar(&dbPath, "db", dbPath, "alias for --db-path")
+	fs.StringVar(&dbPath, "d", dbPath, "alias for --db-path")
 	fs.StringVar(&username, "username", "", "username")
 	fs.Int64Var(&id, "id", 0, "user id")
 	if err := fs.Parse(args); err != nil {
@@ -520,6 +596,7 @@ func runUserPasswd(args []string, env map[string]string, stdin io.Reader, stdout
 	var pwStdin bool
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
 	fs.StringVar(&dbPath, "db", dbPath, "alias for --db-path")
+	fs.StringVar(&dbPath, "d", dbPath, "alias for --db-path")
 	fs.StringVar(&username, "username", "", "username")
 	fs.Int64Var(&id, "id", 0, "user id")
 	fs.StringVar(&password, "password", "", "password")

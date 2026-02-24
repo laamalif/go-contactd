@@ -141,6 +141,16 @@ func TestLoadServeConfig_ServeAliasesAndPortConvenience(t *testing.T) {
 		want func(t *testing.T, cfg config.ServeConfig)
 	}{
 		{
+			name: "short l",
+			args: []string{"-l", ":7069"},
+			want: func(t *testing.T, cfg config.ServeConfig) {
+				t.Helper()
+				if got, want := cfg.ListenAddr, ":7069"; got != want {
+					t.Fatalf("ListenAddr=%q want %q", got, want)
+				}
+			},
+		},
+		{
 			name: "listen alias",
 			args: []string{"--listen", ":7070"},
 			want: func(t *testing.T, cfg config.ServeConfig) {
@@ -161,12 +171,32 @@ func TestLoadServeConfig_ServeAliasesAndPortConvenience(t *testing.T) {
 			},
 		},
 		{
+			name: "short d",
+			args: []string{"-d", "/tmp/short.sqlite"},
+			want: func(t *testing.T, cfg config.ServeConfig) {
+				t.Helper()
+				if got, want := cfg.DBPath, "/tmp/short.sqlite"; got != want {
+					t.Fatalf("DBPath=%q want %q", got, want)
+				}
+			},
+		},
+		{
 			name: "db alias",
 			args: []string{"--db", "/tmp/x.sqlite"},
 			want: func(t *testing.T, cfg config.ServeConfig) {
 				t.Helper()
 				if got, want := cfg.DBPath, "/tmp/x.sqlite"; got != want {
 					t.Fatalf("DBPath=%q want %q", got, want)
+				}
+			},
+		},
+		{
+			name: "short p",
+			args: []string{"-p", "9091"},
+			want: func(t *testing.T, cfg config.ServeConfig) {
+				t.Helper()
+				if got, want := cfg.ListenAddr, ":9091"; got != want {
+					t.Fatalf("ListenAddr=%q want %q", got, want)
 				}
 			},
 		},
@@ -207,12 +237,23 @@ func TestLoadServeConfig_PortAndListenAddrConflictRejected(t *testing.T) {
 	}
 }
 
+func TestLoadServeConfig_ShortPortAndListenConflictRejected(t *testing.T) {
+	t.Parallel()
+
+	_, err := config.LoadServeConfig([]string{"-p", "9090", "-l", ":8080"}, map[string]string{})
+	if err == nil {
+		t.Fatal("LoadServeConfig short-flag conflict error=nil, want error")
+	}
+}
+
 func TestLoadServeConfig_InvalidPortRejected(t *testing.T) {
 	t.Parallel()
 
 	for _, args := range [][]string{
 		{"--port", "0"},
 		{"--port", "65536"},
+		{"-p", "0"},
+		{"-p", "70000"},
 	} {
 		if _, err := config.LoadServeConfig(args, map[string]string{}); err == nil {
 			t.Fatalf("LoadServeConfig(%v) error=nil, want invalid port", args)

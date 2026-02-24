@@ -150,12 +150,14 @@ func parseFlags(cfg *ServeConfig, args []string) error {
 	var port int
 
 	fs.StringVar(&cfg.ListenAddr, "listen-addr", cfg.ListenAddr, "listen address")
+	fs.StringVar(&cfg.ListenAddr, "l", cfg.ListenAddr, "alias for --listen-addr")
 	fs.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr, "alias for --listen-addr")
 	fs.StringVar(&cfg.ListenAddr, "bind", cfg.ListenAddr, "alias for --listen-addr")
 	fs.StringVar(&cfg.ListenAddr, "addr", cfg.ListenAddr, "alias for --listen-addr")
 	fs.StringVar(&cfg.BaseURL, "base-url", cfg.BaseURL, "base URL for absolute redirects (optional)")
 	fs.StringVar(&cfg.BaseURL, "url", cfg.BaseURL, "alias for --base-url")
 	fs.StringVar(&cfg.DBPath, "db-path", cfg.DBPath, "sqlite database path")
+	fs.StringVar(&cfg.DBPath, "d", cfg.DBPath, "alias for --db-path")
 	fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "alias for --db-path")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level")
 	fs.StringVar(&cfg.LogLevel, "level", cfg.LogLevel, "alias for --log-level")
@@ -172,6 +174,7 @@ func parseFlags(cfg *ServeConfig, args []string) error {
 	fs.DurationVar(&cfg.PruneInterval, "prune-interval", cfg.PruneInterval, "background prune interval (0 disables)")
 	fs.BoolVar(&cfg.EnableAddressbookColor, "enable-addressbook-color", cfg.EnableAddressbookColor, "enable INF:addressbook-color PROPPATCH/PROPFIND support")
 	fs.IntVar(&port, "port", 0, "convenience: listen on :PORT (cannot combine with --listen-addr)")
+	fs.IntVar(&port, "p", 0, "alias for --port")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse serve flags: %w", err)
@@ -180,14 +183,14 @@ func parseFlags(cfg *ServeConfig, args []string) error {
 	var listenSet, portSet bool
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "listen-addr", "listen", "bind", "addr":
+		case "listen-addr", "l", "listen", "bind", "addr":
 			listenSet = true
-		case "port":
+		case "port", "p":
 			portSet = true
 		}
 	})
 	if portSet && listenSet {
-		return fmt.Errorf("cannot use --port together with --listen-addr (or its aliases)")
+		return fmt.Errorf("cannot use --port/-p together with --listen-addr/-l (or its aliases)")
 	}
 	if portSet {
 		if port < 1 || port > 65535 {

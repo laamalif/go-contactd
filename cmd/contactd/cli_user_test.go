@@ -161,17 +161,26 @@ func TestCLI_UserList_DBAlias(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "contactd.sqlite")
 	env := map[string]string{}
 
-	code, _, stderr := runCLI(t, []string{"user", "add", "--db", dbPath, "--username", "alice", "--password", "pw1"}, env)
+	var outBuf, errBuf bytes.Buffer
+	code := runMainProgramWithInput("contactctl", []string{"user", "add", "-d", dbPath, "--username", "alice", "--password", "pw1"}, env, bytes.NewBufferString(""), &outBuf, &errBuf)
+	if code != 0 {
+		t.Fatalf("contactctl user add -d code = %d, want 0; stderr=%q", code, errBuf.String())
+	}
+	if !strings.Contains(outBuf.String(), "alice") {
+		t.Fatalf("contactctl user add stdout = %q, want alice", outBuf.String())
+	}
+
+	code, _, stderr := runCLI(t, []string{"user", "add", "--db", dbPath, "--username", "bob", "--password", "pw1"}, env)
 	if code != 0 {
 		t.Fatalf("user add --db code = %d, want 0; stderr=%q", code, stderr)
 	}
 
-	code, stdout, stderr := runCLI(t, []string{"user", "list", "--db", dbPath, "--format", "json"}, env)
+	code, stdout, stderr := runCLI(t, []string{"user", "list", "-d", dbPath, "--format", "json"}, env)
 	if code != 0 {
-		t.Fatalf("user list --db code = %d, want 0; stderr=%q", code, stderr)
+		t.Fatalf("user list -d code = %d, want 0; stderr=%q", code, stderr)
 	}
-	if !strings.Contains(stdout, `"username":"alice"`) {
-		t.Fatalf("user list --db stdout = %q, want alice", stdout)
+	if !strings.Contains(stdout, `"username":"alice"`) || !strings.Contains(stdout, `"username":"bob"`) {
+		t.Fatalf("user list -d stdout = %q, want alice+bob", stdout)
 	}
 }
 
