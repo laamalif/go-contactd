@@ -48,3 +48,18 @@ func TestLoadServeConfig_InvalidUserSeedFails(t *testing.T) {
 		t.Fatalf("error %q does not mention CONTACTD_USERS", err)
 	}
 }
+
+func TestLoadServeConfig_VCardMaxBytesMustNotExceedRequestMaxBytes(t *testing.T) {
+	t.Parallel()
+
+	_, err := config.LoadServeConfig(nil, map[string]string{
+		"CONTACTD_REQUEST_MAX_BYTES": "64",
+		"CONTACTD_VCARD_MAX_BYTES":   "128",
+	})
+	if err == nil {
+		t.Fatal("LoadServeConfig error=nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "vcard max bytes") {
+		t.Fatalf("error %q does not mention vcard max bytes", err)
+	}
+}

@@ -396,6 +396,7 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 		Backend:         contactcarddav.NewBackend(store),
 		Sync:            carddavx.NewSyncService(store),
 		RequestMaxBytes: cfg.RequestMaxBytes,
+		VCardMaxBytes:   cfg.VCardMaxBytes,
 		AttachPrincipal: contactcarddav.WithPrincipal,
 		Authenticate: func(ctx context.Context, username, password string) (string, bool, error) {
 			ok, _, err := store.AuthenticateUser(ctx, username, password)

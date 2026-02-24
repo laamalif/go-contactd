@@ -15,6 +15,7 @@ const (
 	defaultLogLevel        = "info"
 	defaultLogFormat       = "text"
 	defaultRequestMaxBytes = int64(1 << 20) // 1 MiB
+	defaultVCardMaxBytes   = int64(1 << 20) // 1 MiB
 	defaultBookSlug        = "contacts"
 	defaultBookName        = "Contacts"
 	defaultRetentionDays   = 180
@@ -31,6 +32,7 @@ type ServeConfig struct {
 	LogLevel                    string
 	LogFormat                   string
 	RequestMaxBytes             int64
+	VCardMaxBytes               int64
 	TrustProxyHeaders           bool
 	ForceSeed                   bool
 	DefaultBookSlug             string
@@ -47,6 +49,7 @@ func LoadServeConfig(args []string, env map[string]string) (ServeConfig, error) 
 		LogLevel:            defaultLogLevel,
 		LogFormat:           defaultLogFormat,
 		RequestMaxBytes:     defaultRequestMaxBytes,
+		VCardMaxBytes:       defaultVCardMaxBytes,
 		DefaultBookSlug:     defaultBookSlug,
 		DefaultBookName:     defaultBookName,
 		ChangeRetentionDays: defaultRetentionDays,
@@ -88,6 +91,11 @@ func applyEnv(cfg *ServeConfig, env map[string]string) {
 			cfg.RequestMaxBytes = n
 		}
 	}
+	if v, ok := env["CONTACTD_VCARD_MAX_BYTES"]; ok && strings.TrimSpace(v) != "" {
+		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+			cfg.VCardMaxBytes = n
+		}
+	}
 	if v, ok := env["CONTACTD_TRUST_PROXY_HEADERS"]; ok && strings.TrimSpace(v) != "" {
 		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
 			cfg.TrustProxyHeaders = b
@@ -125,6 +133,7 @@ func parseFlags(cfg *ServeConfig, args []string) error {
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level")
 	fs.StringVar(&cfg.LogFormat, "log-format", cfg.LogFormat, "log format (text|json)")
 	fs.Int64Var(&cfg.RequestMaxBytes, "request-max-bytes", cfg.RequestMaxBytes, "max request body bytes")
+	fs.Int64Var(&cfg.VCardMaxBytes, "vcard-max-bytes", cfg.VCardMaxBytes, "max persisted vCard bytes")
 	fs.BoolVar(&cfg.TrustProxyHeaders, "trust-proxy-headers", cfg.TrustProxyHeaders, "trust X-Forwarded-* headers")
 	fs.BoolVar(&cfg.ForceSeed, "force-seed", cfg.ForceSeed, "re-apply env seed even if DB has users")
 	fs.StringVar(&cfg.DefaultBookSlug, "default-book-slug", cfg.DefaultBookSlug, "default addressbook slug")
@@ -152,6 +161,12 @@ func validateServeConfig(cfg ServeConfig) error {
 	}
 	if cfg.RequestMaxBytes <= 0 {
 		return fmt.Errorf("request max bytes must be > 0")
+	}
+	if cfg.VCardMaxBytes <= 0 {
+		return fmt.Errorf("vcard max bytes must be > 0")
+	}
+	if cfg.VCardMaxBytes > cfg.RequestMaxBytes {
+		return fmt.Errorf("vcard max bytes must be <= request max bytes")
 	}
 	if strings.TrimSpace(cfg.DefaultBookSlug) == "" {
 		return fmt.Errorf("default book slug is empty")

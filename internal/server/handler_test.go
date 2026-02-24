@@ -436,6 +436,37 @@ func TestHandler_CardPut_OversizeBodyReturns413(t *testing.T) {
 	}
 }
 
+func TestHandler_CardPut_ExceedsVCardMaxButWithinRequestMax_Returns413(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend:         backend,
+		Sync:            carddavx.NewSyncService(store),
+		RequestMaxBytes: 1024,
+		VCardMaxBytes:   48,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/a.vcf", bytes.NewBufferString(vcardBody("uid-a", strings.Repeat("A", 128))))
+	req.Header.Set("Content-Type", "text/vcard")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusRequestEntityTooLarge; got != want {
+		t.Fatalf("PUT vcard-max status = %d, want %d", got, want)
+	}
+}
+
 func TestHandler_Propfind_PrincipalDepth0And1(t *testing.T) {
 	t.Parallel()
 

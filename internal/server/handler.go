@@ -30,6 +30,7 @@ type HandlerOptions struct {
 	Backend         gocarddav.Backend
 	Sync            *carddavx.SyncService
 	RequestMaxBytes int64
+	VCardMaxBytes   int64
 }
 
 func NewHandler(opts HandlerOptions) http.Handler {
@@ -38,6 +39,9 @@ func NewHandler(opts HandlerOptions) http.Handler {
 	}
 	if opts.RequestMaxBytes <= 0 {
 		opts.RequestMaxBytes = 1 << 20 // 1 MiB
+	}
+	if opts.VCardMaxBytes <= 0 || opts.VCardMaxBytes > opts.RequestMaxBytes {
+		opts.VCardMaxBytes = opts.RequestMaxBytes
 	}
 	return &handler{opts: opts}
 }
@@ -718,12 +722,21 @@ func (h *handler) handleCardPut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, h.opts.RequestMaxBytes)
-	card, err := vcard.NewDecoder(r.Body).Decode()
+	raw, err := io.ReadAll(r.Body)
 	if err != nil {
 		if isMaxBytesError(err) {
 			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 			return
 		}
+		http.Error(w, "invalid vcard", http.StatusBadRequest)
+		return
+	}
+	if int64(len(raw)) > h.opts.VCardMaxBytes {
+		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+		return
+	}
+	card, err := vcard.NewDecoder(bytes.NewReader(raw)).Decode()
+	if err != nil {
 		http.Error(w, "invalid vcard", http.StatusBadRequest)
 		return
 	}
