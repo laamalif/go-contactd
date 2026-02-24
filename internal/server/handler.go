@@ -37,6 +37,8 @@ type HandlerOptions struct {
 	VCardMaxBytes          int64
 }
 
+const syncServerPageLimit = 500
+
 func NewHandler(opts HandlerOptions) http.Handler {
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -137,6 +139,9 @@ func (h *handler) serveHTTP(w http.ResponseWriter, r *http.Request) *http.Reques
 		return r
 	case r.Method == "MKCOL" && h.opts.Backend != nil:
 		h.handleMkcol(w, r)
+		return r
+	case r.Method == http.MethodDelete && h.opts.Backend != nil && classifyDAVPath(r.URL.Path) == davResourceAddressbook:
+		h.handleAddressbookDelete(w, r)
 		return r
 	case h.opts.Backend != nil && isCardPath(r.URL.Path):
 		h.serveCardPath(w, r)
@@ -499,9 +504,12 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 		h.handleAddressbookQuery(w, r)
 		return
 	case "sync-collection":
-		limit := 0
+		limit := syncServerPageLimit
 		if envelope.Limit != nil && envelope.Limit.NResults > 0 {
 			limit = envelope.Limit.NResults
+			if limit > syncServerPageLimit {
+				limit = syncServerPageLimit
+			}
 		}
 		h.handleSyncCollection(w, r, envelope.SyncToken, limit)
 		return
@@ -525,11 +533,122 @@ func (h *handler) handleMkcol(w http.ResponseWriter, r *http.Request) {
 		Path: r.URL.Path,
 		Name: slug,
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, h.opts.RequestMaxBytes)
+	mreq, err := parseMkcolRequest(r.Body)
+	if err != nil {
+		_ = writeInvalidBodyOrTooLarge(w, err, "invalid xml")
+		return
+	}
+	if mreq.ResourceTypePresent && (!mreq.HasCollection || !mreq.HasAddressbook) {
+		http.Error(w, "invalid mkcol resourcetype", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(mreq.DisplayName) != "" {
+		ab.Name = strings.TrimSpace(mreq.DisplayName)
+	}
+	if strings.TrimSpace(mreq.Description) != "" {
+		ab.Description = strings.TrimSpace(mreq.Description)
+	}
 	if err := h.opts.Backend.CreateAddressBook(r.Context(), ab); err != nil {
 		writeBackendError(w, err)
 		return
 	}
+	if (strings.TrimSpace(mreq.DisplayName) != "" || strings.TrimSpace(mreq.Description) != "") && h.opts.Backend != nil {
+		if updater, ok := h.opts.Backend.(addressbookMetadataUpdater); ok {
+			var display, desc *string
+			if strings.TrimSpace(mreq.DisplayName) != "" {
+				v := strings.TrimSpace(mreq.DisplayName)
+				display = &v
+			}
+			if strings.TrimSpace(mreq.Description) != "" {
+				v := strings.TrimSpace(mreq.Description)
+				desc = &v
+			}
+			if err := updater.UpdateAddressBookMetadata(r.Context(), r.URL.Path, display, desc, nil); err != nil {
+				writeBackendError(w, err)
+				return
+			}
+		}
+	}
 	w.WriteHeader(http.StatusCreated)
+}
+
+type mkcolRequest struct {
+	DisplayName         string
+	Description         string
+	ResourceTypePresent bool
+	HasCollection       bool
+	HasAddressbook      bool
+}
+
+func parseMkcolRequest(body io.Reader) (mkcolRequest, error) {
+	if body == nil {
+		return mkcolRequest{}, nil
+	}
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return mkcolRequest{}, err
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return mkcolRequest{}, nil
+	}
+	dec := xml.NewDecoder(bytes.NewReader(raw))
+	var (
+		req       mkcolRequest
+		rootSeen  bool
+		inResType bool
+	)
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return mkcolRequest{}, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if !rootSeen {
+				rootSeen = true
+				if t.Name.Local != "mkcol" {
+					return mkcolRequest{}, fmt.Errorf("unexpected root %q", t.Name.Local)
+				}
+				continue
+			}
+			switch {
+			case matchXMLName(t.Name, xml.Name{Space: davxml.NamespaceDAV, Local: "displayname"}):
+				var v string
+				if err := dec.DecodeElement(&v, &t); err != nil {
+					return mkcolRequest{}, err
+				}
+				req.DisplayName = v
+			case matchXMLName(t.Name, xml.Name{Space: davxml.NamespaceCardDAV, Local: "addressbook-description"}):
+				var v string
+				if err := dec.DecodeElement(&v, &t); err != nil {
+					return mkcolRequest{}, err
+				}
+				req.Description = v
+			case matchXMLName(t.Name, xml.Name{Space: davxml.NamespaceDAV, Local: "resourcetype"}):
+				req.ResourceTypePresent = true
+				inResType = true
+			case inResType && matchXMLName(t.Name, xml.Name{Space: davxml.NamespaceDAV, Local: "collection"}):
+				req.HasCollection = true
+				if err := dec.Skip(); err != nil {
+					return mkcolRequest{}, err
+				}
+			case inResType && matchXMLName(t.Name, xml.Name{Space: davxml.NamespaceCardDAV, Local: "addressbook"}):
+				req.HasAddressbook = true
+				if err := dec.Skip(); err != nil {
+					return mkcolRequest{}, err
+				}
+			}
+		case xml.EndElement:
+			if matchXMLName(t.Name, xml.Name{Space: davxml.NamespaceDAV, Local: "resourcetype"}) {
+				inResType = false
+			}
+		}
+	}
+	return req, nil
 }
 
 func (h *handler) handleProppatch(w http.ResponseWriter, r *http.Request) {
@@ -671,6 +790,14 @@ func (h *handler) handleSyncCollection(w http.ResponseWriter, r *http.Request, r
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	w.WriteHeader(http.StatusMultiStatus)
 	_, _ = w.Write(body)
+}
+
+func (h *handler) handleAddressbookDelete(w http.ResponseWriter, r *http.Request) {
+	if err := h.opts.Backend.DeleteAddressBook(r.Context(), r.URL.Path); err != nil {
+		writeBackendError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *handler) handleAddressbookMultiGet(w http.ResponseWriter, r *http.Request, hrefs []string) {
@@ -962,6 +1089,14 @@ func cardPropfindResponse(ao gocarddav.AddressObject, req propfindRequest) davxm
 			okProp.ResourceType = &davxml.ResourceType{}
 		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "getetag"}):
 			okProp.GetETag = ao.ETag
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "getcontenttype"}):
+			okProp.GetContentType = "text/vcard"
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "getcontentlength"}):
+			okProp.GetContentLength = ao.ContentLength
+		case matchXMLName(p, xml.Name{Space: davxml.NamespaceDAV, Local: "getlastmodified"}):
+			if !ao.ModTime.IsZero() {
+				okProp.GetLastModified = ao.ModTime.UTC().Format(http.TimeFormat)
+			}
 		default:
 			unknown = append(unknown, davxml.RawProp{XMLName: p})
 		}
@@ -993,6 +1128,9 @@ func hasAnyProp(p davxml.Prop) bool {
 		p.SyncToken != "" ||
 		p.GetCTag != "" ||
 		p.GetETag != "" ||
+		p.GetContentType != "" ||
+		p.GetContentLength != 0 ||
+		p.GetLastModified != "" ||
 		p.AddressData != "" ||
 		len(p.Extra) > 0
 }
@@ -1008,6 +1146,9 @@ func cardDefaultPropNames() []xml.Name {
 	return []xml.Name{
 		{Space: davxml.NamespaceDAV, Local: "resourcetype"},
 		{Space: davxml.NamespaceDAV, Local: "getetag"},
+		{Space: davxml.NamespaceDAV, Local: "getcontenttype"},
+		{Space: davxml.NamespaceDAV, Local: "getcontentlength"},
+		{Space: davxml.NamespaceDAV, Local: "getlastmodified"},
 	}
 }
 

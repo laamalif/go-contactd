@@ -379,6 +379,111 @@ func TestDavx_Read_GetCard_IncludesContentTypeETagContentLength(t *testing.T) {
 	}
 }
 
+func TestHandler_CardPropfind_IncludesShouldProps(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	putReq := httptest.NewRequest(http.MethodPut, "/alice/contacts/p.vcf", bytes.NewBufferString(vcardBody("uid-p", "Prop Card")))
+	putReq.Header.Set("Content-Type", "text/vcard")
+	putReq.SetBasicAuth("alice", "secret")
+	putRes := httptest.NewRecorder()
+	h.ServeHTTP(putRes, putReq)
+	if got, want := putRes.Code, http.StatusCreated; got != want {
+		t.Fatalf("seed PUT status = %d, want %d", got, want)
+	}
+
+	reqBody := `<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:getetag/><D:resourcetype/><D:getcontenttype/><D:getcontentlength/><D:getlastmodified/></D:prop></D:propfind>`
+	req := httptest.NewRequest("PROPFIND", "/alice/contacts/p.vcf", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, needle := range []string{"getetag", "resourcetype", "getcontenttype", "getcontentlength", "getlastmodified"} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("PROPFIND body missing %s: %q", needle, body)
+		}
+	}
+	if strings.Contains(body, "HTTP/1.1 404 Not Found") && (strings.Contains(body, "getcontenttype") || strings.Contains(body, "getcontentlength") || strings.Contains(body, "getlastmodified")) {
+		t.Fatalf("SHOULD props unexpectedly returned 404 propstat: %q", body)
+	}
+}
+
+func TestHandler_Mkcol_ParsesBodyMetadata(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:mkcol xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:set>
+    <D:prop>
+      <D:resourcetype><D:collection/><C:addressbook/></D:resourcetype>
+      <D:displayname>Friends Book</D:displayname>
+      <C:addressbook-description>Friends desc</C:addressbook-description>
+    </D:prop>
+  </D:set>
+</D:mkcol>`
+	req := httptest.NewRequest("MKCOL", "/alice/friends-meta/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if got, want := rr.Code, http.StatusCreated; got != want {
+		t.Fatalf("MKCOL status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+
+	propfindReq := httptest.NewRequest("PROPFIND", "/alice/friends-meta/", bytes.NewBufferString(
+		`<?xml version="1.0"?><D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav"><D:prop><D:displayname/><C:addressbook-description/></D:prop></D:propfind>`))
+	propfindReq.SetBasicAuth("alice", "secret")
+	propfindReq.Header.Set("Depth", "0")
+	propfindReq.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	propfindRes := httptest.NewRecorder()
+	h.ServeHTTP(propfindRes, propfindReq)
+	if got, want := propfindRes.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND status = %d, want %d body=%q", got, want, propfindRes.Body.String())
+	}
+	if body := propfindRes.Body.String(); !strings.Contains(body, "Friends Book") || !strings.Contains(body, "Friends desc") {
+		t.Fatalf("PROPFIND missing MKCOL metadata body=%q", body)
+	}
+}
+
+func TestHandler_AddressbookDelete_RoutesToBackend(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	req := httptest.NewRequest(http.MethodDelete, "/alice/contacts/", nil)
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if got, want := rr.Code, http.StatusNoContent; got != want {
+		t.Fatalf("DELETE addressbook status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+
+	has, err := store.HasAddressbook(context.Background(), "alice", "contacts")
+	if err != nil {
+		t.Fatalf("HasAddressbook: %v", err)
+	}
+	if has {
+		t.Fatal("addressbook still exists after DELETE")
+	}
+}
+
 func TestHandler_CardPut_RejectsMissingOrUnsupportedContentType(t *testing.T) {
 	t.Parallel()
 
@@ -2774,6 +2879,60 @@ func TestDavx_Sync_Pagination_TruncatedPageIncludes507SelfResponse(t *testing.T)
 	doc := mustParseSyncMultiStatus(t, rr.Body.Bytes())
 	if !hasSyncStatusForHref(doc, "/alice/contacts/", http.StatusInsufficientStorage) {
 		t.Fatalf("truncated sync missing self 507 response body=%q", rr.Body.String())
+	}
+}
+
+func TestHandler_Report_SyncCollection_DefaultServerLimit500(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	svc := carddavx.NewSyncService(store)
+
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), "alice", "contacts")
+	if err != nil {
+		t.Fatalf("GetAddressbookByUsernameSlug: %v", err)
+	}
+	for i := 0; i < 501; i++ {
+		uid := "uid-default-" + strconv.Itoa(i)
+		if _, err := store.PutCard(context.Background(), db.PutCardInput{
+			AddressbookID: ab.ID,
+			Href:          "d" + strconv.Itoa(i) + ".vcf",
+			UID:           uid,
+			VCard:         []byte(vcardBody(uid, "Default "+strconv.Itoa(i))),
+		}); err != nil {
+			t.Fatalf("PutCard #%d: %v", i, err)
+		}
+	}
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            svc,
+	})
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:sync-collection xmlns:D="DAV:">
+  <D:sync-token>` + carddavx.FormatSyncToken(ab.ID, 0) + `</D:sync-token>
+  <D:sync-level>1</D:sync-level>
+</D:sync-collection>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("sync-collection status = %d, want %d", got, want)
+	}
+	doc := mustParseSyncMultiStatus(t, rr.Body.Bytes())
+	if got, want := countNonSelfSyncResponses(doc, "/alice/contacts/"), 500; got != want {
+		t.Fatalf("default limit item responses = %d, want %d", got, want)
+	}
+	if !hasSyncStatusForHref(doc, "/alice/contacts/", http.StatusInsufficientStorage) {
+		t.Fatalf("default-limit sync missing self 507 response body=%q", rr.Body.String())
 	}
 }
 

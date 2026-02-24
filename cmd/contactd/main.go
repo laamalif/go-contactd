@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +28,12 @@ import (
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
+
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildDate = "unknown"
+)
 
 func run(args []string, stdout, stderr *os.File) int {
 	return runMain(args, currentEnvMap(), stdout, stderr)
@@ -44,13 +51,50 @@ func runMain(args []string, env map[string]string, stdout, stderr io.Writer) int
 	case "user":
 		return runUser(args[1:], env, stdout, stderr)
 	case "version":
-		_, _ = fmt.Fprintln(stdout, "go-contactd dev")
-		return 0
+		return runVersion(args[1:], stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown subcommand: %s\n", args[0])
 		_, _ = fmt.Fprintln(stderr, "usage: go-contactd <subcommand>")
 		return 2
 	}
+}
+
+func runVersion(args []string, stdout, stderr io.Writer) int {
+	fs := newCLIFlagSet("version")
+	format := "text"
+	fs.StringVar(&format, "format", format, "text|json")
+	if err := fs.Parse(args); err != nil {
+		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
+		return 2
+	}
+	if fs.NArg() != 0 {
+		_, _ = fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
+		return 2
+	}
+	if format != "text" && format != "json" {
+		_, _ = fmt.Fprintf(stderr, "usage error: invalid --format %q\n", format)
+		return 2
+	}
+
+	if format == "json" {
+		out := map[string]string{
+			"version":    version,
+			"commit":     commit,
+			"build_date": buildDate,
+			"go_version": runtime.Version(),
+			"platform":   runtime.GOOS + "/" + runtime.GOARCH,
+		}
+		enc := json.NewEncoder(stdout)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(out); err != nil {
+			_, _ = fmt.Fprintf(stderr, "internal error: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	_, _ = fmt.Fprintf(stdout, "go-contactd %s (commit %s, built %s, %s, %s/%s)\n", version, commit, buildDate, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	return 0
 }
 
 func runServe(args []string, env map[string]string, stderr io.Writer) int {

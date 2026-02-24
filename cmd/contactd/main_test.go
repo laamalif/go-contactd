@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"log/slog"
@@ -295,6 +296,57 @@ func TestLogging_Format_TextAndJSON(t *testing.T) {
 	newServeLogger("json", "info", &jsonBuf).Info("request", "event", "request")
 	if got := jsonBuf.String(); !strings.Contains(got, `"event":"request"`) {
 		t.Fatalf("json logger output missing json field: %q", got)
+	}
+}
+
+func TestRunMain_Version_FormatTextAndJSON(t *testing.T) {
+	t.Parallel()
+
+	origVersion, origCommit, origBuildDate := version, commit, buildDate
+	version, commit, buildDate = "v0.1.0", "abc1234", "2026-02-24"
+	defer func() {
+		version, commit, buildDate = origVersion, origCommit, origBuildDate
+	}()
+
+	var textOut, textErr bytes.Buffer
+	code := runMain([]string{"version", "--format", "text"}, map[string]string{}, &textOut, &textErr)
+	if code != 0 {
+		t.Fatalf("version --format text code = %d, want 0 stderr=%q", code, textErr.String())
+	}
+	if got := textOut.String(); !strings.Contains(got, "go-contactd v0.1.0") || !strings.Contains(got, "commit abc1234") || !strings.Contains(got, "built 2026-02-24") {
+		t.Fatalf("version text output missing metadata: %q", got)
+	}
+
+	var jsonOut, jsonErr bytes.Buffer
+	code = runMain([]string{"version", "--format", "json"}, map[string]string{}, &jsonOut, &jsonErr)
+	if code != 0 {
+		t.Fatalf("version --format json code = %d, want 0 stderr=%q", code, jsonErr.String())
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(jsonOut.Bytes(), &doc); err != nil {
+		t.Fatalf("json.Unmarshal version output: %v; out=%q", err, jsonOut.String())
+	}
+	if got, want := doc["version"], "v0.1.0"; got != want {
+		t.Fatalf("version json field = %#v, want %q", got, want)
+	}
+	if got, want := doc["commit"], "abc1234"; got != want {
+		t.Fatalf("commit json field = %#v, want %q", got, want)
+	}
+	if got, want := doc["build_date"], "2026-02-24"; got != want {
+		t.Fatalf("build_date json field = %#v, want %q", got, want)
+	}
+}
+
+func TestRunMain_Version_InvalidFormatReturns2(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := runMain([]string{"version", "--format", "yaml"}, map[string]string{}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("version invalid format code = %d, want 2", code)
+	}
+	if got := stderr.String(); !strings.Contains(got, "invalid --format") {
+		t.Fatalf("stderr missing invalid format error: %q", got)
 	}
 }
 

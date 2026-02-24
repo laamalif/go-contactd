@@ -76,6 +76,9 @@ type Prop struct {
 	SyncToken            string                `xml:"DAV: sync-token,omitempty"`
 	GetCTag              string                `xml:"http://calendarserver.org/ns/ getctag,omitempty"`
 	GetETag              string                `xml:"DAV: getetag,omitempty"`
+	GetContentType       string                `xml:"DAV: getcontenttype,omitempty"`
+	GetContentLength     int64                 `xml:"DAV: getcontentlength,omitempty"`
+	GetLastModified      string                `xml:"DAV: getlastmodified,omitempty"`
 	AddressData          string                `xml:"urn:ietf:params:xml:ns:carddav address-data,omitempty"`
 	Extra                []RawProp             `xml:",any,omitempty"`
 }
