@@ -1,0 +1,1 @@
+<?xml version='1.0' encoding='UTF-8' ?><propfind xmlns="DAV:" xmlns:CAL="urn:ietf:params:xml:ns:caldav" xmlns:CARD="urn:ietf:params:xml:ns:carddav"><prop><resourcetype /><displayname /><current-user-principal /><CARD:addressbook-home-set /><CARD:addressbook-description /></prop></propfind>

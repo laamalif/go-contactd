@@ -1203,17 +1203,11 @@ func TestHandler_Propfind_RootDiscoveryDepth0_ReturnsCurrentUserPrincipal(t *tes
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := newAuthedHandlerForTests(backend)
 
-	reqBody := `<?xml version="1.0" encoding="UTF-8"?>
-<D:propfind xmlns:D="DAV:" xmlns:CARD="urn:ietf:params:xml:ns:carddav">
-  <D:prop>
-    <D:resourcetype/>
-    <D:displayname/>
-    <D:current-user-principal/>
-    <CARD:addressbook-home-set/>
-    <CARD:addressbook-description/>
-  </D:prop>
-</D:propfind>`
-	req := httptest.NewRequest("PROPFIND", "/", bytes.NewBufferString(reqBody))
+	reqBodyBytes, err := os.ReadFile(filepath.Join("testdata", "davx5_root_propfind.xml"))
+	if err != nil {
+		t.Fatalf("ReadFile fixture: %v", err)
+	}
+	req := httptest.NewRequest("PROPFIND", "/", bytes.NewBuffer(reqBodyBytes))
 	req.SetBasicAuth("alice", "secret")
 	req.Header.Set("Depth", "0")
 	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
