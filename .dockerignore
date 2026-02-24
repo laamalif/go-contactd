@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+AGENTS.md
+PLAN.md
+deploy/
+data/
+*.sqlite
+*.sqlite-*
+*.db
+*.log
+coverage.*
+*.out
+*.test
+bin/
+dist/
