@@ -11,7 +11,7 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-$(go env GOARCH)}" \
 	go build -trimpath -ldflags='-s -w' -o /out/contactd ./cmd/contactd && \
-	ln -sf /contactd /out/contactctl
+	go build -trimpath -ldflags='-s -w' -o /out/contactctl ./cmd/contactctl
 
 FROM gcr.io/distroless/static:nonroot
 

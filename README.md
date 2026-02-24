@@ -56,7 +56,7 @@ contactd [flags]
 contactctl user <add|list|delete|passwd>
 ```
 
-`contactd` is the daemon (old-school `sshd/httpd` style). `contactctl` is the admin utility (same binary code, different behavior selected by executable name/`argv[0]`).
+`contactd` is the daemon (old-school `sshd/httpd` style). `contactctl` is the admin utility (separate binary, shared internal code).
 
 Daemon (`contactd`) examples:
 

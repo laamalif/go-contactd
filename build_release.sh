@@ -8,7 +8,7 @@ DIST_DIR="${DIST_DIR:-dist}"
 BIN_NAME="${BIN_NAME:-contactd}"
 ADMIN_BIN_NAME="${ADMIN_BIN_NAME:-contactctl}"
 PKG="${PKG:-./cmd/contactd}"
-WRITE_ALIAS_SYMLINKS="${WRITE_ALIAS_SYMLINKS:-1}"
+ADMIN_PKG="${ADMIN_PKG:-./cmd/contactctl}"
 
 DEFAULT_TARGETS=(
   "linux/amd64"
@@ -73,6 +73,8 @@ for target in "${TARGETS[@]}"; do
   esac
 
   out="${DIST_DIR}/${BIN_NAME}_${safe_version}_${goos}_${goarch}"
+  admin_out="${DIST_DIR}/${ADMIN_BIN_NAME}_${safe_version}_${goos}_${goarch}"
+  rm -f "${out}" "${admin_out}"
   printf '[release] building %s -> %s\n' "${target}" "${out}"
   VERSION="${VERSION}" \
   COMMIT="${COMMIT}" \
@@ -83,11 +85,15 @@ for target in "${TARGETS[@]}"; do
   "${ROOT_DIR}/build_dist.sh" --strip -o "${out}" "${PKG}"
 
   checksum_line "${out}" >>"${checksum_file}"
-
-  if [[ "${WRITE_ALIAS_SYMLINKS}" == "1" ]]; then
-    admin_alias="${DIST_DIR}/${ADMIN_BIN_NAME}_${safe_version}_${goos}_${goarch}"
-    ln -sf "$(basename "${out}")" "${admin_alias}"
-  fi
+  printf '[release] building %s -> %s\n' "${target}" "${admin_out}"
+  VERSION="${VERSION}" \
+  COMMIT="${COMMIT}" \
+  BUILD_DATE="${BUILD_DATE}" \
+  GOOS="${goos}" \
+  GOARCH="${goarch}" \
+  CGO_ENABLED=0 \
+  "${ROOT_DIR}/build_dist.sh" --strip -o "${admin_out}" "${ADMIN_PKG}"
+  checksum_line "${admin_out}" >>"${checksum_file}"
 done
 
 printf '[release] wrote %s\n' "${checksum_file}"

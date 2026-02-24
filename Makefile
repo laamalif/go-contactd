@@ -6,6 +6,7 @@ ADMIN_BIN_NAME ?= contactctl
 BIN_DIR ?= bin
 DIST_DIR ?= dist
 PKG ?= ./cmd/contactd
+ADMIN_PKG ?= ./cmd/contactctl
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || printf 'dev')
 COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -15,18 +16,21 @@ STAMP_LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buil
 
 build:
 	mkdir -p "$(BIN_DIR)"
+	rm -f "$(BIN_DIR)/$(BIN_NAME)" "$(BIN_DIR)/$(ADMIN_BIN_NAME)"
 	./build_dist.sh -o "$(BIN_DIR)/$(BIN_NAME)" "$(PKG)"
-	ln -sf "$(BIN_NAME)" "$(BIN_DIR)/$(ADMIN_BIN_NAME)"
+	./build_dist.sh -o "$(BIN_DIR)/$(ADMIN_BIN_NAME)" "$(ADMIN_PKG)"
 
 build-static:
 	mkdir -p "$(BIN_DIR)"
+	rm -f "$(BIN_DIR)/$(BIN_NAME)" "$(BIN_DIR)/$(ADMIN_BIN_NAME)"
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w $(STAMP_LDFLAGS)" -o "$(BIN_DIR)/$(BIN_NAME)" "$(PKG)"
-	ln -sf "$(BIN_NAME)" "$(BIN_DIR)/$(ADMIN_BIN_NAME)"
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w $(STAMP_LDFLAGS)" -o "$(BIN_DIR)/$(ADMIN_BIN_NAME)" "$(ADMIN_PKG)"
 
 build-static-ext:
 	mkdir -p "$(BIN_DIR)"
+	rm -f "$(BIN_DIR)/$(BIN_NAME)" "$(BIN_DIR)/$(ADMIN_BIN_NAME)"
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w -extldflags '-static' $(STAMP_LDFLAGS)" -o "$(BIN_DIR)/$(BIN_NAME)" "$(PKG)"
-	ln -sf "$(BIN_NAME)" "$(BIN_DIR)/$(ADMIN_BIN_NAME)"
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w -extldflags '-static' $(STAMP_LDFLAGS)" -o "$(BIN_DIR)/$(ADMIN_BIN_NAME)" "$(ADMIN_PKG)"
 
 dist:
 	./build_release.sh
