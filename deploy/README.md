@@ -21,6 +21,12 @@ The container runs `go-contactd serve` and persists SQLite data under `/data` (n
 
 The image uses a distroless runtime, so no shell-based in-container healthcheck command is configured.
 
+## Native Smoke / E2E Script
+
+Run a native-binary smoke flow (health, discovery, write/read, sync, restart, sync continuity):
+
+`bash deploy/smoke-native.sh`
+
 ## Reverse proxy notes
 
 - The service speaks HTTP internally.
