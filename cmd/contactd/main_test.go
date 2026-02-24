@@ -418,8 +418,25 @@ func TestHumanizeDBOpenError_SQLiteCantOpen14_Normalized(t *testing.T) {
 
 	dbPath := filepath.Join(t.TempDir(), "contactd.db")
 	err := humanizeDBOpenError(dbPath, errors.New(`apply pragma "PRAGMA foreign_keys = ON;": unable to open database file: out of memory (14)`))
-	if got := err.Error(); got != fmt.Sprintf("cannot open database %s: permission denied", dbPath) {
+	if got := err.Error(); got != fmt.Sprintf("cannot open database %s: sqlite cannot open database file", dbPath) {
 		t.Fatalf("humanizeDBOpenError = %q", got)
+	}
+}
+
+func TestHumanizeServeFatalError_StripsKnownPrefixesRegardlessOrder(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "contactd.db")
+	baseErr := errors.New("flag provided but not defined: -bogus")
+
+	gotA := humanizeServeFatalError(dbPath, fmt.Errorf("load config: parse serve flags: %w", baseErr))
+	if gotA == nil || gotA.Error() != baseErr.Error() {
+		t.Fatalf("strip prefixes (load->parse) = %v, want %q", gotA, baseErr.Error())
+	}
+
+	gotB := humanizeServeFatalError(dbPath, fmt.Errorf("parse serve flags: load config: %w", baseErr))
+	if gotB == nil || gotB.Error() != baseErr.Error() {
+		t.Fatalf("strip prefixes (parse->load) = %v, want %q", gotB, baseErr.Error())
 	}
 }
 

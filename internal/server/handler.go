@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"path"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,6 +93,10 @@ type addressbookMetadataUpdater interface {
 
 type addressbookColorReader interface {
 	GetAddressBookColor(ctx context.Context, p string) (string, error)
+}
+
+type addressObjectPutWithStatus interface {
+	PutAddressObjectWithStatus(ctx context.Context, p string, card vcard.Card, opts *gocarddav.PutAddressObjectOptions) (*gocarddav.AddressObject, bool, error)
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -250,7 +255,7 @@ func requestRemoteForLog(r *http.Request, trustProxy bool) string {
 	if host == "" {
 		return r.RemoteAddr
 	}
-	return r.RemoteAddr
+	return host
 }
 
 func writeBasicChallenge(w http.ResponseWriter) {
@@ -1221,7 +1226,7 @@ func (h *handler) handleCardGet(w http.ResponseWriter, r *http.Request) {
 	if ao.ETag != "" {
 		w.Header().Set("ETag", ao.ETag)
 	}
-	w.Header().Set("Content-Length", strconvItoa(buf.Len()))
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(buf.Bytes())
 }
@@ -1229,14 +1234,6 @@ func (h *handler) handleCardGet(w http.ResponseWriter, r *http.Request) {
 func (h *handler) handleCardPut(w http.ResponseWriter, r *http.Request) {
 	if !isVCardContentType(r.Header.Get("Content-Type")) {
 		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
-		return
-	}
-
-	var existed bool
-	if _, err := h.opts.Backend.GetAddressObject(r.Context(), r.URL.Path, nil); err == nil {
-		existed = true
-	} else if status, ok := httpStatusFromError(err); !ok || status != http.StatusNotFound {
-		writeBackendError(w, err)
 		return
 	}
 
@@ -1255,10 +1252,28 @@ func (h *handler) handleCardPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid vcard", http.StatusBadRequest)
 		return
 	}
-	ao, err := h.opts.Backend.PutAddressObject(r.Context(), r.URL.Path, card, &gocarddav.PutAddressObjectOptions{
+	putOpts := &gocarddav.PutAddressObjectOptions{
 		IfMatch:     webdav.ConditionalMatch(r.Header.Get("If-Match")),
 		IfNoneMatch: webdav.ConditionalMatch(r.Header.Get("If-None-Match")),
-	})
+	}
+
+	var (
+		ao      *gocarddav.AddressObject
+		created bool
+	)
+	if be, ok := h.opts.Backend.(addressObjectPutWithStatus); ok {
+		ao, created, err = be.PutAddressObjectWithStatus(r.Context(), r.URL.Path, card, putOpts)
+	} else {
+		var existed bool
+		if _, getErr := h.opts.Backend.GetAddressObject(r.Context(), r.URL.Path, nil); getErr == nil {
+			existed = true
+		} else if status, ok := httpStatusFromError(getErr); !ok || status != http.StatusNotFound {
+			writeBackendError(w, getErr)
+			return
+		}
+		ao, err = h.opts.Backend.PutAddressObject(r.Context(), r.URL.Path, card, putOpts)
+		created = !existed
+	}
 	if err != nil {
 		writeBackendError(w, err)
 		return
@@ -1266,11 +1281,11 @@ func (h *handler) handleCardPut(w http.ResponseWriter, r *http.Request) {
 	if ao != nil && ao.ETag != "" {
 		w.Header().Set("ETag", ao.ETag)
 	}
-	if existed {
-		w.WriteHeader(http.StatusNoContent)
+	if created {
+		w.WriteHeader(http.StatusCreated)
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *handler) handleCardDelete(w http.ResponseWriter, r *http.Request) {
@@ -1454,9 +1469,4 @@ func httpStatusFromError(err error) (int, bool) {
 		err = u.Unwrap()
 	}
 	return 0, false
-}
-
-func strconvItoa(n int) string {
-	// Tiny local helper avoids pulling in strconv for a single callsite in tests.
-	return fmt.Sprintf("%d", n)
 }

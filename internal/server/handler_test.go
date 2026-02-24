@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/emersion/go-vcard"
+	webdav "github.com/emersion/go-webdav"
 	gocarddav "github.com/emersion/go-webdav/carddav"
 	contactcarddav "github.com/laamalif/go-contactd/internal/carddav"
 	"github.com/laamalif/go-contactd/internal/carddavx"
@@ -170,7 +172,7 @@ func TestHandler_AccessLog_JSON_OnePerRequestAndRequiredFields(t *testing.T) {
 	if _, ok := entry["resp_bytes"]; !ok {
 		t.Fatalf("resp_bytes missing in log entry %#v", entry)
 	}
-	if got, want := entry["remote"], "10.0.0.5:4242"; got != want {
+	if got, want := entry["remote"], "10.0.0.5"; got != want {
 		t.Fatalf("remote = %#v, want %q", got, want)
 	}
 	if got, want := entry["user"], ""; got != want {
@@ -232,7 +234,7 @@ func TestHandler_AccessLog_ProxyRemoteBehavior_TrustDisabledAndEnabled(t *testin
 	rrDisabled := httptest.NewRecorder()
 	hDisabled.ServeHTTP(rrDisabled, makeReq())
 	entryDisabled := parseJSONLogLine(t, nonEmptyLines(disabledBuf.String())[0])
-	if got, want := entryDisabled["remote"], "10.0.0.5:4242"; got != want {
+	if got, want := entryDisabled["remote"], "10.0.0.5"; got != want {
 		t.Fatalf("trust disabled remote = %#v, want %q", got, want)
 	}
 
@@ -340,6 +342,68 @@ func TestHandler_CardPutGetDelete_WithBackend(t *testing.T) {
 	h.ServeHTTP(getRes2, getReq2)
 	if got, want := getRes2.Code, http.StatusNotFound; got != want {
 		t.Fatalf("GET after delete status = %d, want %d", got, want)
+	}
+}
+
+type putStatusFakeBackend struct{}
+
+func (putStatusFakeBackend) CurrentUserPrincipal(context.Context) (string, error) {
+	return "/alice/", nil
+}
+func (putStatusFakeBackend) AddressBookHomeSetPath(context.Context) (string, error) {
+	return "/alice/", nil
+}
+func (putStatusFakeBackend) ListAddressBooks(context.Context) ([]gocarddav.AddressBook, error) {
+	return nil, nil
+}
+func (putStatusFakeBackend) GetAddressBook(context.Context, string) (*gocarddav.AddressBook, error) {
+	return nil, webdav.NewHTTPError(http.StatusNotFound, nil)
+}
+func (putStatusFakeBackend) CreateAddressBook(context.Context, *gocarddav.AddressBook) error {
+	return nil
+}
+func (putStatusFakeBackend) DeleteAddressBook(context.Context, string) error { return nil }
+func (putStatusFakeBackend) GetAddressObject(context.Context, string, *gocarddav.AddressDataRequest) (*gocarddav.AddressObject, error) {
+	return nil, webdav.NewHTTPError(http.StatusNotFound, nil)
+}
+func (putStatusFakeBackend) ListAddressObjects(context.Context, string, *gocarddav.AddressDataRequest) ([]gocarddav.AddressObject, error) {
+	return nil, nil
+}
+func (putStatusFakeBackend) QueryAddressObjects(context.Context, string, *gocarddav.AddressBookQuery) ([]gocarddav.AddressObject, error) {
+	return nil, nil
+}
+func (putStatusFakeBackend) PutAddressObject(context.Context, string, vcard.Card, *gocarddav.PutAddressObjectOptions) (*gocarddav.AddressObject, error) {
+	return nil, errors.New("legacy PutAddressObject should not be called when status-aware put is available")
+}
+func (putStatusFakeBackend) PutAddressObjectWithStatus(_ context.Context, p string, card vcard.Card, _ *gocarddav.PutAddressObjectOptions) (*gocarddav.AddressObject, bool, error) {
+	return &gocarddav.AddressObject{Path: p, ETag: `"etag-updated"`, Card: card}, false, nil
+}
+func (putStatusFakeBackend) DeleteAddressObject(context.Context, string) error { return nil }
+
+func TestHandler_CardPut_UsesBackendCreateStatusWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: putStatusFakeBackend{},
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return "alice", username == "alice" && password == "secret", nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	body := "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:u1\r\nFN:Alice\r\nEND:VCARD\r\n"
+	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/a.vcf", strings.NewReader(body))
+	req.Header.Set("Content-Type", "text/vcard; charset=utf-8")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusNoContent; got != want {
+		t.Fatalf("status = %d, want %d; body=%q", got, want, rr.Body.String())
+	}
+	if got := rr.Header().Get("ETag"); got != `"etag-updated"` {
+		t.Fatalf("ETag = %q, want quoted etag", got)
 	}
 }
 

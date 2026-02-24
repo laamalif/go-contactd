@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/emersion/go-vcard"
 	webdav "github.com/emersion/go-webdav"
@@ -196,33 +195,42 @@ func (b *Backend) QueryAddressObjects(ctx context.Context, p string, query *goca
 }
 
 func (b *Backend) PutAddressObject(ctx context.Context, p string, card vcard.Card, opts *gocarddav.PutAddressObjectOptions) (*gocarddav.AddressObject, error) {
+	ao, _, err := b.putAddressObject(ctx, p, card, opts)
+	return ao, err
+}
+
+func (b *Backend) PutAddressObjectWithStatus(ctx context.Context, p string, card vcard.Card, opts *gocarddav.PutAddressObjectOptions) (*gocarddav.AddressObject, bool, error) {
+	return b.putAddressObject(ctx, p, card, opts)
+}
+
+func (b *Backend) putAddressObject(ctx context.Context, p string, card vcard.Card, opts *gocarddav.PutAddressObjectOptions) (*gocarddav.AddressObject, bool, error) {
 	user, slug, href, err := parseCardPathForPrincipal(ctx, p)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	ab, err := b.store.GetAddressbookByUsernameSlug(ctx, user, slug)
 	if err != nil {
-		return nil, mapStoreErr(err)
+		return nil, false, mapStoreErr(err)
 	}
 
 	var existing *db.Card
 	if row, err := b.store.GetCard(ctx, ab.ID, href); err == nil {
 		existing = &row
 	} else if !errors.Is(err, db.ErrNotFound) {
-		return nil, mapStoreErr(err)
+		return nil, false, mapStoreErr(err)
 	}
 
 	if err := checkConditional(existing, opts); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	uid := strings.TrimSpace(card.PreferredValue(vcard.FieldUID))
 	if uid == "" {
-		return nil, webdav.NewHTTPError(http.StatusBadRequest, fmt.Errorf("missing UID"))
+		return nil, false, webdav.NewHTTPError(http.StatusBadRequest, fmt.Errorf("missing UID"))
 	}
 	raw, err := encodeCard(card)
 	if err != nil {
-		return nil, webdav.NewHTTPError(http.StatusBadRequest, fmt.Errorf("encode vcard: %w", err))
+		return nil, false, webdav.NewHTTPError(http.StatusBadRequest, fmt.Errorf("encode vcard: %w", err))
 	}
 
 	in := db.PutCardInput{
@@ -231,28 +239,31 @@ func (b *Backend) PutAddressObject(ctx context.Context, p string, card vcard.Car
 		UID:           uid,
 		VCard:         raw,
 	}
-	var putErr error
+	var (
+		putRes db.PutCardResult
+		putErr error
+	)
 	if cond, ok := putCardConditionsFromRequest(existing, opts); ok {
-		_, putErr = b.store.PutCardConditional(ctx, in, cond)
+		putRes, putErr = b.store.PutCardConditional(ctx, in, cond)
 	} else {
-		_, putErr = b.store.PutCard(ctx, in)
+		putRes, putErr = b.store.PutCard(ctx, in)
 	}
 	if err := putErr; err != nil {
 		if isUniqueErr(err) {
-			return nil, gocarddav.NewPreconditionError(gocarddav.PreconditionNoUIDConflict)
+			return nil, false, gocarddav.NewPreconditionError(gocarddav.PreconditionNoUIDConflict)
 		}
-		return nil, mapStoreErr(err)
+		return nil, false, mapStoreErr(err)
 	}
 
 	row, err := b.store.GetCard(ctx, ab.ID, href)
 	if err != nil {
-		return nil, mapStoreErr(err)
+		return nil, false, mapStoreErr(err)
 	}
 	ao, err := toAddressObject(user, slug, row)
 	if err != nil {
-		return nil, webdav.NewHTTPError(http.StatusInternalServerError, err)
+		return nil, false, webdav.NewHTTPError(http.StatusInternalServerError, err)
 	}
-	return &ao, nil
+	return &ao, putRes.Created, nil
 }
 
 func (b *Backend) DeleteAddressObject(ctx context.Context, p string) error {
@@ -425,6 +436,3 @@ func mapStoreErr(err error) error {
 	}
 	return err
 }
-
-// Keep import of time stable for go-webdav AddressObject docs/usage and future use.
-var _ = time.Time{}

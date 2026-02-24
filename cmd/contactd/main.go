@@ -272,8 +272,14 @@ func humanizeServeFatalError(dbPath string, err error) error {
 		return nil
 	}
 	msg := err.Error()
-	msg = strings.TrimPrefix(msg, "load config: ")
-	msg = strings.TrimPrefix(msg, "parse serve flags: ")
+	for {
+		trimmed := strings.TrimPrefix(msg, "load config: ")
+		trimmed = strings.TrimPrefix(trimmed, "parse serve flags: ")
+		if trimmed == msg {
+			break
+		}
+		msg = trimmed
+	}
 	if msg != err.Error() {
 		return errors.New(msg)
 	}
@@ -284,10 +290,10 @@ func extractDBPathForFatal(args []string, env map[string]string) string {
 	cfg, err := config.LoadServeConfig(args, env)
 	if err != nil {
 		// Fallback to the known default if even config parsing failed.
-		return "/var/db/contactd.db"
+		return config.DefaultDBPath
 	}
 	if strings.TrimSpace(cfg.DBPath) == "" {
-		return "/var/db/contactd.db"
+		return config.DefaultDBPath
 	}
 	return cfg.DBPath
 }
@@ -312,8 +318,9 @@ func humanizeDBOpenError(dbPath string, err error) error {
 	}
 
 	// SQLite CANTOPEN (14) is often surfaced by modernc with misleading "out of memory (14)" text.
+	// Prefer a generic "cannot open" diagnosis if we cannot reliably determine a filesystem cause.
 	if strings.Contains(msg, "(14)") || strings.Contains(msg, "unable to open database file") {
-		return fmt.Errorf("cannot open database %s: permission denied", dbPath)
+		return fmt.Errorf("cannot open database %s: sqlite cannot open database file", dbPath)
 	}
 	return err
 }

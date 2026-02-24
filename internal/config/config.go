@@ -24,6 +24,8 @@ const (
 	defaultPruneInterval   = 24 * time.Hour
 )
 
+const DefaultDBPath = defaultDBPath
+
 type SeedUser struct {
 	Username     string
 	PasswordHash string
