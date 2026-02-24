@@ -22,7 +22,8 @@
 .Sh DESCRIPTION
 .Nm
 manages users and imports/exports vCards for
-.Xr contactd 8 .
+.Nm contactd
+.Pq 8 .
 It is intended for local administration and scripting.
 .Pp
 User-management subcommands operate directly on the SQLite database.
@@ -71,7 +72,10 @@ Default:
 Alias for
 .Fl -db-path .
 .It Fl -dry-run
-Validate and summarize without writing files (export) or database changes (import).
+Validate and summarize without writing files
+.Pq export
+or database changes
+.Pq import .
 .It Fl V , Fl -version
 Print version and exit.
 .It Fl h , Fl -help
@@ -133,11 +137,13 @@ contactctl import --username bob --dry-run ./backup
 .Ed
 .El
 .Sh SEE ALSO
-.Xr contactd 8
+.Nm contactd
+.Pq 8
 .Sh AUTHORS
-Project uses
+This project uses
 .Lk https://github.com/emersion/go-webdav go-webdav
 and
 .Lk https://github.com/emersion/go-vcard go-vcard
-by Simon Ser
+by
+.An Simon Ser
 .Pq emersion .
