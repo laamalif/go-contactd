@@ -15,6 +15,9 @@ const (
 	defaultLogLevel        = "info"
 	defaultLogFormat       = "text"
 	defaultRequestMaxBytes = int64(1 << 20) // 1 MiB
+	defaultBookSlug        = "contacts"
+	defaultBookName        = "Contacts"
+	defaultRetentionDays   = 180
 )
 
 type SeedUser struct {
@@ -23,23 +26,30 @@ type SeedUser struct {
 }
 
 type ServeConfig struct {
-	ListenAddr        string
-	DBPath            string
-	LogLevel          string
-	LogFormat         string
-	RequestMaxBytes   int64
-	TrustProxyHeaders bool
-	ForceSeed         bool
-	Users             []SeedUser
+	ListenAddr                  string
+	DBPath                      string
+	LogLevel                    string
+	LogFormat                   string
+	RequestMaxBytes             int64
+	TrustProxyHeaders           bool
+	ForceSeed                   bool
+	DefaultBookSlug             string
+	DefaultBookName             string
+	ChangeRetentionDays         int
+	ChangeRetentionMaxRevisions int64
+	Users                       []SeedUser
 }
 
 func LoadServeConfig(args []string, env map[string]string) (ServeConfig, error) {
 	cfg := ServeConfig{
-		ListenAddr:      defaultListenAddr,
-		DBPath:          defaultDBPath,
-		LogLevel:        defaultLogLevel,
-		LogFormat:       defaultLogFormat,
-		RequestMaxBytes: defaultRequestMaxBytes,
+		ListenAddr:          defaultListenAddr,
+		DBPath:              defaultDBPath,
+		LogLevel:            defaultLogLevel,
+		LogFormat:           defaultLogFormat,
+		RequestMaxBytes:     defaultRequestMaxBytes,
+		DefaultBookSlug:     defaultBookSlug,
+		DefaultBookName:     defaultBookName,
+		ChangeRetentionDays: defaultRetentionDays,
 	}
 
 	applyEnv(&cfg, env)
@@ -88,6 +98,22 @@ func applyEnv(cfg *ServeConfig, env map[string]string) {
 			cfg.ForceSeed = b
 		}
 	}
+	if v, ok := env["CONTACTD_DEFAULT_BOOK_SLUG"]; ok && strings.TrimSpace(v) != "" {
+		cfg.DefaultBookSlug = strings.TrimSpace(v)
+	}
+	if v, ok := env["CONTACTD_DEFAULT_BOOK_NAME"]; ok && strings.TrimSpace(v) != "" {
+		cfg.DefaultBookName = strings.TrimSpace(v)
+	}
+	if v, ok := env["CONTACTD_CHANGE_RETENTION_DAYS"]; ok && strings.TrimSpace(v) != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			cfg.ChangeRetentionDays = n
+		}
+	}
+	if v, ok := env["CONTACTD_CHANGE_RETENTION_MAX_REVISIONS"]; ok && strings.TrimSpace(v) != "" {
+		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+			cfg.ChangeRetentionMaxRevisions = n
+		}
+	}
 }
 
 func parseFlags(cfg *ServeConfig, args []string) error {
@@ -101,6 +127,10 @@ func parseFlags(cfg *ServeConfig, args []string) error {
 	fs.Int64Var(&cfg.RequestMaxBytes, "request-max-bytes", cfg.RequestMaxBytes, "max request body bytes")
 	fs.BoolVar(&cfg.TrustProxyHeaders, "trust-proxy-headers", cfg.TrustProxyHeaders, "trust X-Forwarded-* headers")
 	fs.BoolVar(&cfg.ForceSeed, "force-seed", cfg.ForceSeed, "re-apply env seed even if DB has users")
+	fs.StringVar(&cfg.DefaultBookSlug, "default-book-slug", cfg.DefaultBookSlug, "default addressbook slug")
+	fs.StringVar(&cfg.DefaultBookName, "default-book-name", cfg.DefaultBookName, "default addressbook display name")
+	fs.IntVar(&cfg.ChangeRetentionDays, "change-retention-days", cfg.ChangeRetentionDays, "retain card_changes for this many days")
+	fs.Int64Var(&cfg.ChangeRetentionMaxRevisions, "change-retention-max-revisions", cfg.ChangeRetentionMaxRevisions, "keep latest N revisions per addressbook (0 disables)")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse serve flags: %w", err)
@@ -122,6 +152,18 @@ func validateServeConfig(cfg ServeConfig) error {
 	}
 	if cfg.RequestMaxBytes <= 0 {
 		return fmt.Errorf("request max bytes must be > 0")
+	}
+	if strings.TrimSpace(cfg.DefaultBookSlug) == "" {
+		return fmt.Errorf("default book slug is empty")
+	}
+	if strings.TrimSpace(cfg.DefaultBookName) == "" {
+		return fmt.Errorf("default book name is empty")
+	}
+	if cfg.ChangeRetentionDays < 0 {
+		return fmt.Errorf("change retention days must be >= 0")
+	}
+	if cfg.ChangeRetentionMaxRevisions < 0 {
+		return fmt.Errorf("change retention max revisions must be >= 0")
 	}
 
 	return nil

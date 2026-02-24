@@ -6,9 +6,11 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
 
@@ -19,6 +21,8 @@ type Store struct {
 	hooks TestHooks
 	now   func() time.Time
 }
+
+var ErrNotFound = errors.New("not found")
 
 type TestHooks struct {
 	BeforeCardChangeInsert func() error
@@ -119,6 +123,57 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) (
 	return id, nil
 }
 
+func (s *Store) UserCount(ctx context.Context) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count users: %w", err)
+	}
+	return n, nil
+}
+
+func (s *Store) UserIDByUsername(ctx context.Context, username string) (int64, error) {
+	var id int64
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM users WHERE username = ?`, username).Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrNotFound
+		}
+		return 0, fmt.Errorf("select user id by username: %w", err)
+	}
+	return id, nil
+}
+
+func (s *Store) SetUserPasswordHash(ctx context.Context, userID int64, passwordHash string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, userID)
+	if err != nil {
+		return fmt.Errorf("update user password hash: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) AuthenticateUser(ctx context.Context, username, password string) (bool, int64, error) {
+	var (
+		id           int64
+		passwordHash string
+	)
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT id, password_hash
+		FROM users
+		WHERE username = ?
+	`, username).Scan(&id, &passwordHash); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, 0, nil
+		}
+		return false, 0, fmt.Errorf("select auth user: %w", err)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return false, 0, nil
+		}
+		return false, 0, fmt.Errorf("compare password hash: %w", err)
+	}
+	return true, id, nil
+}
+
 func (s *Store) CreateAddressbook(ctx context.Context, userID int64, slug, displayname string) (int64, error) {
 	now := s.now().UTC()
 	res, err := s.db.ExecContext(ctx, `
@@ -133,6 +188,37 @@ func (s *Store) CreateAddressbook(ctx context.Context, userID int64, slug, displ
 		return 0, fmt.Errorf("addressbook last insert id: %w", err)
 	}
 	return id, nil
+}
+
+func (s *Store) EnsureAddressbook(ctx context.Context, userID int64, slug, displayname string) (int64, bool, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id FROM addressbooks WHERE user_id = ? AND slug = ?
+	`, userID, slug).Scan(&id)
+	if err == nil {
+		return id, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, fmt.Errorf("select addressbook for ensure: %w", err)
+	}
+	id, err = s.CreateAddressbook(ctx, userID, slug, displayname)
+	if err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
+}
+
+func (s *Store) HasAddressbook(ctx context.Context, username, slug string) (bool, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM addressbooks ab
+		JOIN users u ON u.id = ab.user_id
+		WHERE u.username = ? AND ab.slug = ?
+	`, username, slug).Scan(&n); err != nil {
+		return false, fmt.Errorf("has addressbook: %w", err)
+	}
+	return n > 0, nil
 }
 
 func (s *Store) AddressbookRevision(ctx context.Context, addressbookID int64) (int64, error) {
