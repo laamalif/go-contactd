@@ -55,6 +55,7 @@ type RawProp struct {
 type Error struct {
 	XMLName        xml.Name  `xml:"DAV: error"`
 	ValidSyncToken *struct{} `xml:"valid-sync-token,omitempty"`
+	Extra          []RawProp `xml:",any,omitempty"`
 }
 
 func Marshal(v any) ([]byte, error) {
@@ -83,6 +84,11 @@ func PropStatStatus(prop Prop, code int) PropStat {
 func DAVCollection() *struct{}      { return &struct{}{} }
 func DAVPrincipal() *struct{}       { return &struct{}{} }
 func CardDAVAddressbook() *struct{} { return &struct{}{} }
+func CardDAVPrecondition(name string) Error {
+	return Error{
+		Extra: []RawProp{{XMLName: xml.Name{Space: NamespaceCardDAV, Local: name}}},
+	}
+}
 
 func itoa(n int) string {
 	return fmt.Sprintf("%d", n)

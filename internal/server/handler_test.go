@@ -251,6 +251,63 @@ func TestHandler_CardDelete_IfMatchEnforced(t *testing.T) {
 	}
 }
 
+func TestHandler_CardPut_UIDConflict_ReturnsCardDAVPreconditionXML(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	putA := httptest.NewRequest(http.MethodPut, "/alice/contacts/a.vcf", bytes.NewBufferString(vcardBody("same-uid", "Alice A")))
+	putA.Header.Set("Content-Type", "text/vcard")
+	putA.SetBasicAuth("alice", "secret")
+	putARes := httptest.NewRecorder()
+	h.ServeHTTP(putARes, putA)
+	if got, want := putARes.Code, http.StatusCreated; got != want {
+		t.Fatalf("PUT create status = %d, want %d", got, want)
+	}
+
+	putB := httptest.NewRequest(http.MethodPut, "/alice/contacts/b.vcf", bytes.NewBufferString(vcardBody("same-uid", "Alice B")))
+	putB.Header.Set("Content-Type", "text/vcard")
+	putB.SetBasicAuth("alice", "secret")
+	putBRes := httptest.NewRecorder()
+	h.ServeHTTP(putBRes, putB)
+
+	if got, want := putBRes.Code, http.StatusConflict; got != want {
+		t.Fatalf("PUT uid conflict status = %d, want %d", got, want)
+	}
+	if ct := putBRes.Header().Get("Content-Type"); ct != "application/xml; charset=utf-8" {
+		t.Fatalf("PUT uid conflict content-type = %q, want application/xml; charset=utf-8", ct)
+	}
+	body := putBRes.Body.String()
+	if !strings.Contains(body, "no-uid-conflict") {
+		t.Fatalf("PUT uid conflict body missing no-uid-conflict: %q", body)
+	}
+	if !strings.Contains(body, "urn:ietf:params:xml:ns:carddav") {
+		t.Fatalf("PUT uid conflict body missing CardDAV namespace: %q", body)
+	}
+}
+
+func TestHandler_CardPut_InvalidVCard_Returns400(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/a.vcf", bytes.NewBufferString("not-a-vcard"))
+	req.Header.Set("Content-Type", "text/vcard")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("PUT invalid vcard status = %d, want %d", got, want)
+	}
+}
+
 func TestHandler_Propfind_PrincipalDepth0And1(t *testing.T) {
 	t.Parallel()
 

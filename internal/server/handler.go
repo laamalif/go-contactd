@@ -642,6 +642,15 @@ func writeBackendError(w http.ResponseWriter, err error) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	if status, ok := httpStatusFromError(err); ok && status == http.StatusConflict && strings.Contains(err.Error(), "no-uid-conflict") {
+		body, mErr := davxml.Marshal(davxml.CardDAVPrecondition("no-uid-conflict"))
+		if mErr == nil {
+			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write(body)
+			return
+		}
+	}
 	if status, ok := httpStatusFromError(err); ok {
 		// Keep DELETE 204 body contract by only using this on error paths.
 		http.Error(w, http.StatusText(status), status)
