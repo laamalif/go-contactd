@@ -23,6 +23,7 @@ type Store struct {
 }
 
 var ErrNotFound = errors.New("not found")
+var ErrPreconditionFailed = errors.New("precondition failed")
 
 type TestHooks struct {
 	BeforeCardChangeInsert func() error
@@ -33,6 +34,11 @@ type PutCardInput struct {
 	Href          string
 	UID           string
 	VCard         []byte
+}
+
+type PutCardConditions struct {
+	RequireAbsent          bool
+	ExpectedCurrentETagHex *string
 }
 
 type PutCardResult struct {
@@ -560,6 +566,14 @@ func (s *Store) ListCardChangesSince(ctx context.Context, addressbookID int64, a
 }
 
 func (s *Store) PutCard(ctx context.Context, in PutCardInput) (PutCardResult, error) {
+	return s.putCard(ctx, in, nil)
+}
+
+func (s *Store) PutCardConditional(ctx context.Context, in PutCardInput, cond PutCardConditions) (PutCardResult, error) {
+	return s.putCard(ctx, in, &cond)
+}
+
+func (s *Store) putCard(ctx context.Context, in PutCardInput, cond *PutCardConditions) (PutCardResult, error) {
 	if in.AddressbookID == 0 {
 		return PutCardResult{}, fmt.Errorf("addressbook_id is required")
 	}
@@ -572,11 +586,30 @@ func (s *Store) PutCard(ctx context.Context, in PutCardInput) (PutCardResult, er
 
 	var out PutCardResult
 	err := s.withImmediateTx(ctx, func(conn *sql.Conn) error {
-		var existing int
-		if err := conn.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM cards WHERE addressbook_id = ? AND href = ?
-		`, in.AddressbookID, in.Href).Scan(&existing); err != nil {
+		var (
+			existing     int
+			existingETag sql.NullString
+		)
+		switch err := conn.QueryRowContext(ctx, `
+			SELECT etag FROM cards WHERE addressbook_id = ? AND href = ?
+		`, in.AddressbookID, in.Href).Scan(&existingETag); {
+		case err == nil:
+			existing = 1
+		case errors.Is(err, sql.ErrNoRows):
+			existing = 0
+		default:
 			return fmt.Errorf("check existing card: %w", err)
+		}
+
+		if cond != nil {
+			if cond.RequireAbsent && existing != 0 {
+				return ErrPreconditionFailed
+			}
+			if cond.ExpectedCurrentETagHex != nil {
+				if existing == 0 || !existingETag.Valid || existingETag.String != *cond.ExpectedCurrentETagHex {
+					return ErrPreconditionFailed
+				}
+			}
 		}
 
 		if existing == 0 {

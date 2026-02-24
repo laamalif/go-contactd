@@ -225,12 +225,19 @@ func (b *Backend) PutAddressObject(ctx context.Context, p string, card vcard.Car
 		return nil, webdav.NewHTTPError(http.StatusBadRequest, fmt.Errorf("encode vcard: %w", err))
 	}
 
-	if _, err := b.store.PutCard(ctx, db.PutCardInput{
+	in := db.PutCardInput{
 		AddressbookID: ab.ID,
 		Href:          href,
 		UID:           uid,
 		VCard:         raw,
-	}); err != nil {
+	}
+	var putErr error
+	if cond, ok := putCardConditionsFromRequest(existing, opts); ok {
+		_, putErr = b.store.PutCardConditional(ctx, in, cond)
+	} else {
+		_, putErr = b.store.PutCard(ctx, in)
+	}
+	if err := putErr; err != nil {
 		if isUniqueErr(err) {
 			return nil, gocarddav.NewPreconditionError(gocarddav.PreconditionNoUIDConflict)
 		}
@@ -330,6 +337,24 @@ func checkConditional(existing *db.Card, opts *gocarddav.PutAddressObjectOptions
 	return nil
 }
 
+func putCardConditionsFromRequest(existing *db.Card, opts *gocarddav.PutAddressObjectOptions) (db.PutCardConditions, bool) {
+	if opts == nil {
+		return db.PutCardConditions{}, false
+	}
+	var cond db.PutCardConditions
+	var enabled bool
+	if opts.IfNoneMatch.IsSet() && opts.IfNoneMatch.IsWildcard() {
+		cond.RequireAbsent = true
+		enabled = true
+	}
+	if opts.IfMatch.IsSet() && existing != nil {
+		etagHex := existing.ETagHex
+		cond.ExpectedCurrentETagHex = &etagHex
+		enabled = true
+	}
+	return cond, enabled
+}
+
 func parseAddressbookPathForPrincipal(ctx context.Context, p string) (user, slug string, _ error) {
 	principal, err := principalFromContext(ctx)
 	if err != nil {
@@ -391,6 +416,9 @@ func isUniqueErr(err error) bool {
 func mapStoreErr(err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, db.ErrPreconditionFailed) {
+		return webdav.NewHTTPError(http.StatusPreconditionFailed, err)
 	}
 	if errors.Is(err, db.ErrNotFound) {
 		return webdav.NewHTTPError(http.StatusNotFound, err)

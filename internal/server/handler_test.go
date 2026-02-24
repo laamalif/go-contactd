@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/emersion/go-vcard"
@@ -433,6 +435,83 @@ func TestHandler_CardRoundTripFidelity_PreservesUnicodeAndPhotoPayload(t *testin
 	}
 	if !strings.Contains(gotBody, photo) {
 		t.Fatalf("GET body missing photo payload: %q", gotBody)
+	}
+}
+
+func TestHandler_CardPut_IfMatchRace_One204One412(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+
+	h := newAuthedHandlerForTests(backend)
+
+	seedReq := httptest.NewRequest(http.MethodPut, "/alice/contacts/race.vcf", bytes.NewBufferString(vcardBody("uid-race", "Base")))
+	seedReq.Header.Set("Content-Type", "text/vcard")
+	seedReq.SetBasicAuth("alice", "secret")
+	seedRes := httptest.NewRecorder()
+	h.ServeHTTP(seedRes, seedReq)
+	if got, want := seedRes.Code, http.StatusCreated; got != want {
+		t.Fatalf("seed PUT status = %d, want %d", got, want)
+	}
+	etag := seedRes.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("seed PUT missing ETag")
+	}
+
+	blockFirst := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var hookCalls atomic.Int32
+	store.SetTestHooks(db.TestHooks{
+		BeforeCardChangeInsert: func() error {
+			if hookCalls.Add(1) == 1 {
+				close(blockFirst)
+				<-releaseFirst
+			}
+			return nil
+		},
+	})
+	defer store.SetTestHooks(db.TestHooks{})
+
+	type result struct {
+		status int
+		body   string
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	runUpdate := func(name string) {
+		defer wg.Done()
+		req := httptest.NewRequest(http.MethodPut, "/alice/contacts/race.vcf", bytes.NewBufferString(vcardBody("uid-race", name)))
+		req.Header.Set("Content-Type", "text/vcard")
+		req.Header.Set("If-Match", etag)
+		req.SetBasicAuth("alice", "secret")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		results <- result{status: rr.Code, body: rr.Body.String()}
+	}
+
+	wg.Add(2)
+	go runUpdate("Alice A")
+	<-blockFirst
+	go runUpdate("Alice B")
+	close(releaseFirst)
+	wg.Wait()
+	close(results)
+
+	var count204, count412 int
+	for res := range results {
+		switch res.status {
+		case http.StatusNoContent:
+			count204++
+		case http.StatusPreconditionFailed:
+			count412++
+		default:
+			t.Fatalf("unexpected concurrent PUT status = %d body=%q", res.status, res.body)
+		}
+	}
+	if count204 != 1 || count412 != 1 {
+		t.Fatalf("concurrent PUT results = 204x%d/412x%d, want 1/1", count204, count412)
 	}
 }
 

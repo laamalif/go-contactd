@@ -269,6 +269,40 @@ func TestRunMain_Version_NoDaemonAccessLogs(t *testing.T) {
 	}
 }
 
+func TestServeHTTPGracefully_ListenFailureLogsEvent(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	srv := &fakeServeServer{
+		listenAndServeFn: func() error { return errors.New("bind failed") },
+		shutdownFn:       func(context.Context) error { return nil },
+	}
+
+	code := serveHTTPGracefully(context.Background(), srv, newServeLogger("text", "info", &logs))
+	if code != 1 {
+		t.Fatalf("serveHTTPGracefully code = %d, want 1", code)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "event=\"listen failed\"") {
+		t.Fatalf("logs missing listen failed event: %q", out)
+	}
+}
+
+func TestPrepareServeRuntime_LogsDBErrorOnOpenFailure(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	_, err := prepareServeRuntime(context.Background(), nil, map[string]string{
+		"CONTACTD_DB_PATH": t.TempDir(), // opening a directory path as sqlite DB should fail
+	}, &logs)
+	if err == nil {
+		t.Fatal("prepareServeRuntime error=nil, want open db error")
+	}
+	if got := logs.String(); !strings.Contains(got, "event=\"db error\"") {
+		t.Fatalf("logs missing db error event: %q", got)
+	}
+}
+
 func TestPrepareServeRuntime_SyncTokenContinuesAcrossRestart(t *testing.T) {
 	t.Parallel()
 

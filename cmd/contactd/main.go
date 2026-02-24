@@ -439,10 +439,12 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 
 	store, err := db.Open(ctx, cfg.DBPath)
 	if err != nil {
+		logger.Error("db error", "event", "db error", "op", "open", "error", err)
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
 	if err := startupStore(ctx, store, cfg, logger); err != nil {
+		logger.Error("db error", "event", "db error", "op", "startup", "error", err)
 		_ = store.Close()
 		return nil, err
 	}
