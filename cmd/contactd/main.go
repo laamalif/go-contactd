@@ -36,10 +36,14 @@ var (
 )
 
 func run(args []string, stdout, stderr *os.File) int {
-	return runMain(args, currentEnvMap(), stdout, stderr)
+	return runMainWithInput(args, currentEnvMap(), os.Stdin, stdout, stderr)
 }
 
 func runMain(args []string, env map[string]string, stdout, stderr io.Writer) int {
+	return runMainWithInput(args, env, os.Stdin, stdout, stderr)
+}
+
+func runMainWithInput(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprintln(stderr, "usage: go-contactd <subcommand>")
 		return 2
@@ -49,7 +53,7 @@ func runMain(args []string, env map[string]string, stdout, stderr io.Writer) int
 	case "serve":
 		return runServe(args[1:], env, stderr)
 	case "user":
-		return runUser(args[1:], env, stdout, stderr)
+		return runUser(args[1:], env, stdin, stdout, stderr)
 	case "version":
 		return runVersion(args[1:], stdout, stderr)
 	default:
@@ -177,7 +181,7 @@ func serveHTTPGracefully(runCtx context.Context, srv serveHTTPServer, logger *sl
 	return 0
 }
 
-func runUser(args []string, env map[string]string, stdout, stderr io.Writer) int {
+func runUser(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprintln(stderr, "usage: go-contactd user <add|list|delete|passwd>")
 		return 2
@@ -185,13 +189,13 @@ func runUser(args []string, env map[string]string, stdout, stderr io.Writer) int
 
 	switch args[0] {
 	case "add":
-		return runUserAdd(args[1:], env, stdout, stderr)
+		return runUserAdd(args[1:], env, stdin, stdout, stderr)
 	case "list":
 		return runUserList(args[1:], env, stdout, stderr)
 	case "delete":
 		return runUserDelete(args[1:], env, stdout, stderr)
 	case "passwd":
-		return runUserPasswd(args[1:], env, stdout, stderr)
+		return runUserPasswd(args[1:], env, stdin, stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown user subcommand: %s\n", args[0])
 		_, _ = fmt.Fprintln(stderr, "usage: go-contactd user <add|list|delete|passwd>")
@@ -199,18 +203,22 @@ func runUser(args []string, env map[string]string, stdout, stderr io.Writer) int
 	}
 }
 
-func runUserAdd(args []string, env map[string]string, stdout, stderr io.Writer) int {
+const defaultCLIDBPath = "/var/db/contactd.db"
+
+func runUserAdd(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := newCLIFlagSet("user add")
 	var (
-		dbPath   = defaultCLIOpt(env["CONTACTD_DB_PATH"], "/data/contactd.sqlite")
+		dbPath   = defaultCLIOpt(env["CONTACTD_DB_PATH"], defaultCLIDBPath)
 		username string
 		password string
+		pwStdin  bool
 		bookSlug = defaultCLIOpt(env["CONTACTD_DEFAULT_BOOK_SLUG"], "contacts")
 		bookName = defaultCLIOpt(env["CONTACTD_DEFAULT_BOOK_NAME"], "Contacts")
 	)
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
 	fs.StringVar(&username, "username", "", "username")
 	fs.StringVar(&password, "password", "", "password")
+	fs.BoolVar(&pwStdin, "password-stdin", false, "read password from stdin (safer than argv)")
 	fs.StringVar(&bookSlug, "default-book-slug", bookSlug, "default addressbook slug")
 	fs.StringVar(&bookName, "default-book-name", bookName, "default addressbook name")
 	if err := fs.Parse(args); err != nil {
@@ -225,8 +233,10 @@ func runUserAdd(args []string, env map[string]string, stdout, stderr io.Writer) 
 		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
 		return 2
 	}
-	if password == "" {
-		_, _ = fmt.Fprintln(stderr, "usage error: --password is required")
+	var err error
+	password, err = resolvePasswordInput(password, pwStdin, stdin)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
 		return 2
 	}
 
@@ -262,7 +272,7 @@ func runUserAdd(args []string, env map[string]string, stdout, stderr io.Writer) 
 
 func runUserList(args []string, env map[string]string, stdout, stderr io.Writer) int {
 	fs := newCLIFlagSet("user list")
-	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], "/data/contactd.sqlite")
+	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], defaultCLIDBPath)
 	format := "table"
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
 	fs.StringVar(&format, "format", format, "table|json")
@@ -318,7 +328,7 @@ func runUserList(args []string, env map[string]string, stdout, stderr io.Writer)
 
 func runUserDelete(args []string, env map[string]string, stdout, stderr io.Writer) int {
 	fs := newCLIFlagSet("user delete")
-	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], "/data/contactd.sqlite")
+	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], defaultCLIDBPath)
 	var username string
 	var id int64
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
@@ -366,16 +376,18 @@ func runUserDelete(args []string, env map[string]string, stdout, stderr io.Write
 	return 0
 }
 
-func runUserPasswd(args []string, env map[string]string, stdout, stderr io.Writer) int {
+func runUserPasswd(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := newCLIFlagSet("user passwd")
-	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], "/data/contactd.sqlite")
+	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], defaultCLIDBPath)
 	var username string
 	var id int64
 	var password string
+	var pwStdin bool
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
 	fs.StringVar(&username, "username", "", "username")
 	fs.Int64Var(&id, "id", 0, "user id")
 	fs.StringVar(&password, "password", "", "password")
+	fs.BoolVar(&pwStdin, "password-stdin", false, "read password from stdin (safer than argv)")
 	if err := fs.Parse(args); err != nil {
 		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
 		return 2
@@ -388,8 +400,10 @@ func runUserPasswd(args []string, env map[string]string, stdout, stderr io.Write
 		_, _ = fmt.Fprintln(stderr, "usage error: specify exactly one of --username or --id")
 		return 2
 	}
-	if password == "" {
-		_, _ = fmt.Fprintln(stderr, "usage error: --password is required")
+	var err error
+	password, err = resolvePasswordInput(password, pwStdin, stdin)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
 		return 2
 	}
 
@@ -435,6 +449,28 @@ func runUserPasswd(args []string, env map[string]string, stdout, stderr io.Write
 		_, _ = fmt.Fprintf(stdout, "user password updated: id=%d\n", id)
 	}
 	return 0
+}
+
+func resolvePasswordInput(password string, passwordStdin bool, stdin io.Reader) (string, error) {
+	hasPassword := password != ""
+	if hasPassword == passwordStdin {
+		return "", fmt.Errorf("specify exactly one of --password or --password-stdin")
+	}
+	if hasPassword {
+		return password, nil
+	}
+	if stdin == nil {
+		return "", fmt.Errorf("stdin is not available")
+	}
+	raw, err := io.ReadAll(stdin)
+	if err != nil {
+		return "", fmt.Errorf("read stdin: %w", err)
+	}
+	pw := strings.TrimRight(string(raw), "\r\n")
+	if pw == "" {
+		return "", fmt.Errorf("password from stdin is empty")
+	}
+	return pw, nil
 }
 
 func newCLIFlagSet(name string) *flag.FlagSet {

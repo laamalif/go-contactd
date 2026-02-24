@@ -54,11 +54,11 @@ go-contactd <subcommand>
 Subcommands:
 
 - `serve [flags]` start HTTP server
-- `user add --username --password [--db-path --default-book-slug --default-book-name]`
+- `user add --username (--password | --password-stdin) [--db-path --default-book-slug --default-book-name]`
 - `user list [--db-path] [--format table|json]`
 - `user delete (--username | --id) [--db-path]`
-- `user passwd (--username | --id) --password [--db-path]`
-- `version` prints version text (currently `go-contactd dev`)
+- `user passwd (--username | --id) (--password | --password-stdin) [--db-path]`
+- `version [--format text|json]` prints build metadata
 
 Common exit codes:
 
@@ -75,7 +75,7 @@ Core runtime:
 
 | Env var | Flag | Default | Notes |
 |---|---|---:|---|
-| `CONTACTD_DB_PATH` | `--db-path` | `/data/contactd.sqlite` | Required in most deployments |
+| `CONTACTD_DB_PATH` | `--db-path` | `/var/db/contactd.db` | Override to `/data/contactd.sqlite` in container deployments |
 | `CONTACTD_LISTEN_ADDR` | `--listen-addr` | `:8080` | Overrides `PORT` |
 | `PORT` | n/a | unset | Used only if `CONTACTD_LISTEN_ADDR` is unset |
 | `CONTACTD_BASE_URL` | `--base-url` | inferred/empty | Used for absolute redirects (e.g. `/.well-known/carddav`); DAV `href`s stay root-relative |
@@ -142,7 +142,7 @@ Current runtime logs are intentionally minimal (startup/listen/shutdown/error pa
 1. Create a user:
 
    ```bash
-   go run ./cmd/contactd user add --db-path /path/to/contactd.sqlite --username alice --password 'secret'
+   printf '%s\n' 'secret' | go run ./cmd/contactd user add --db-path /path/to/contactd.sqlite --username alice --password-stdin
    ```
 
 2. Start the server (direct or via Docker/compose).

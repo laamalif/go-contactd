@@ -107,10 +107,63 @@ func TestCLI_UserDelete_NotFoundExitCode3(t *testing.T) {
 	}
 }
 
+func TestCLI_UserAddAndPasswd_PasswordStdin(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "contactd.sqlite")
+	env := map[string]string{"CONTACTD_DB_PATH": dbPath}
+
+	code, stdout, stderr := runCLIWithInput(t, []string{"user", "add", "--username", "alice", "--password-stdin"}, env, "pw1\n")
+	if code != 0 {
+		t.Fatalf("user add --password-stdin code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stdout, "alice") {
+		t.Fatalf("user add stdout = %q, want username", stdout)
+	}
+
+	code, stdout, stderr = runCLIWithInput(t, []string{"user", "passwd", "--username", "alice", "--password-stdin"}, env, "pw2\n")
+	if code != 0 {
+		t.Fatalf("user passwd --password-stdin code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if stdout == "" {
+		t.Fatal("user passwd stdout empty")
+	}
+
+	store := openStoreForCLIAssert(t, dbPath)
+	defer func() { _ = store.Close() }()
+	okNew, _, err := store.AuthenticateUser(context.Background(), "alice", "pw2")
+	if err != nil {
+		t.Fatalf("AuthenticateUser new: %v", err)
+	}
+	if !okNew {
+		t.Fatal("new password from stdin does not authenticate")
+	}
+}
+
+func TestCLI_UserAdd_PasswordFlagsConflictRejected(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "contactd.sqlite")
+	env := map[string]string{"CONTACTD_DB_PATH": dbPath}
+
+	code, _, stderr := runCLIWithInput(t, []string{"user", "add", "--username", "alice", "--password", "pw", "--password-stdin"}, env, "pw\n")
+	if code != 2 {
+		t.Fatalf("user add conflicting password flags code = %d, want 2", code)
+	}
+	if !strings.Contains(strings.ToLower(stderr), "exactly one") {
+		t.Fatalf("stderr = %q, want xor validation error", stderr)
+	}
+}
+
 func runCLI(t *testing.T, args []string, env map[string]string) (code int, stdout string, stderr string) {
 	t.Helper()
+	return runCLIWithInput(t, args, env, "")
+}
+
+func runCLIWithInput(t *testing.T, args []string, env map[string]string, stdin string) (code int, stdout string, stderr string) {
+	t.Helper()
 	var outBuf, errBuf bytes.Buffer
-	code = runMain(args, env, &outBuf, &errBuf)
+	code = runMainWithInput(args, env, bytes.NewBufferString(stdin), &outBuf, &errBuf)
 	return code, outBuf.String(), errBuf.String()
 }
 

@@ -35,6 +35,18 @@ func TestLoadServeConfig_PriorityAndPortFallback(t *testing.T) {
 	}
 }
 
+func TestLoadServeConfig_DefaultDBPath_IsBSDFriendly(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.LoadServeConfig(nil, map[string]string{})
+	if err != nil {
+		t.Fatalf("LoadServeConfig returned error: %v", err)
+	}
+	if got, want := cfg.DBPath, "/var/db/contactd.db"; got != want {
+		t.Fatalf("DBPath default = %q, want %q", got, want)
+	}
+}
+
 func TestLoadServeConfig_InvalidUserSeedFails(t *testing.T) {
 	t.Parallel()
 

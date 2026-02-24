@@ -13,7 +13,7 @@ import (
 
 const (
 	defaultListenAddr      = ":8080"
-	defaultDBPath          = "/data/contactd.sqlite"
+	defaultDBPath          = "/var/db/contactd.db"
 	defaultLogLevel        = "info"
 	defaultLogFormat       = "text"
 	defaultRequestMaxBytes = int64(1 << 20) // 1 MiB
