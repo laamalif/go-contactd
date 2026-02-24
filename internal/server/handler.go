@@ -81,6 +81,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "PROPFIND" && h.opts.Backend != nil:
 		h.handlePropfind(w, r)
 		return
+	case r.Method == "PROPPATCH" && h.opts.Backend != nil:
+		h.handleProppatch(w, r)
+		return
 	case r.Method == "REPORT" && h.opts.Backend != nil:
 		h.handleReport(w, r)
 		return
@@ -263,6 +266,77 @@ func parsePropfindRequest(body io.Reader) (propfindRequest, error) {
 	return req, nil
 }
 
+type proppatchRequest struct {
+	Props []xml.Name
+}
+
+func parseProppatchRequest(body io.Reader) (proppatchRequest, error) {
+	if body == nil {
+		return proppatchRequest{}, fmt.Errorf("empty body")
+	}
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return proppatchRequest{}, err
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return proppatchRequest{}, fmt.Errorf("empty body")
+	}
+
+	dec := xml.NewDecoder(bytes.NewReader(raw))
+	req := proppatchRequest{}
+	var (
+		rootSeen bool
+		depth    int
+		inProp   bool
+	)
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return proppatchRequest{}, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if !rootSeen {
+				rootSeen = true
+				if t.Name.Local != "propertyupdate" {
+					return proppatchRequest{}, fmt.Errorf("unexpected root %q", t.Name.Local)
+				}
+				depth = 1
+				continue
+			}
+			switch {
+			case depth == 2 && t.Name.Space == davxml.NamespaceDAV && t.Name.Local == "prop":
+				inProp = true
+				depth++
+			case inProp && depth == 3:
+				req.Props = append(req.Props, t.Name)
+				if err := dec.Skip(); err != nil {
+					return proppatchRequest{}, err
+				}
+			default:
+				depth++
+			}
+		case xml.EndElement:
+			if inProp && t.Name.Space == davxml.NamespaceDAV && t.Name.Local == "prop" {
+				inProp = false
+			}
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	if !rootSeen {
+		return proppatchRequest{}, fmt.Errorf("empty body")
+	}
+	if len(req.Props) == 0 {
+		return proppatchRequest{}, fmt.Errorf("no properties")
+	}
+	return req, nil
+}
+
 func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 	if classifyDAVPath(r.URL.Path) != davResourceAddressbook {
 		http.NotFound(w, r)
@@ -301,6 +375,40 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
 		return
 	}
+}
+
+func (h *handler) handleProppatch(w http.ResponseWriter, r *http.Request) {
+	if classifyDAVPath(r.URL.Path) != davResourceAddressbook {
+		http.NotFound(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, h.opts.RequestMaxBytes)
+	req, err := parseProppatchRequest(r.Body)
+	if err != nil {
+		_ = writeInvalidBodyOrTooLarge(w, err, "invalid xml")
+		return
+	}
+
+	unsupported := make([]davxml.RawProp, 0, len(req.Props))
+	for _, p := range req.Props {
+		unsupported = append(unsupported, davxml.RawProp{XMLName: p})
+	}
+	ms := davxml.MultiStatus{
+		Responses: []davxml.Response{{
+			Href: r.URL.Path,
+			PropStats: []davxml.PropStat{
+				davxml.PropStatStatus(davxml.Prop{Extra: unsupported}, http.StatusForbidden),
+			},
+		}},
+	}
+	body, err := davxml.Marshal(ms)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.WriteHeader(http.StatusMultiStatus)
+	_, _ = w.Write(body)
 }
 
 func (h *handler) handleSyncCollection(w http.ResponseWriter, r *http.Request, rawToken string, limit int) {
