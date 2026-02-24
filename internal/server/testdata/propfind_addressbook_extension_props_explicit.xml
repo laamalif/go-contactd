@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<multistatus xmlns="DAV:">
+  <response>
+    <href>/alice/contacts/</href>
+    <propstat>
+      <prop>
+        <sync-token xmlns="DAV:">{{SYNC_TOKEN}}</sync-token>
+        <getctag xmlns="http://calendarserver.org/ns/">0</getctag>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+</multistatus>

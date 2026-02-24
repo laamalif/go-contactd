@@ -840,6 +840,68 @@ func TestHandler_Propfind_AddressbookExplicitExtensionProps(t *testing.T) {
 	}
 }
 
+func TestHandler_Propfind_AddressbookExplicitExtensionProps_BodyMatchesGolden(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:CS="http://calendarserver.org/ns/">
+  <D:prop>
+    <D:sync-token/>
+    <CS:getctag/>
+  </D:prop>
+</D:propfind>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND addressbook extension props golden status = %d, want %d", got, want)
+	}
+	assertGoldenSyncXML(t, rr.Body.String(), "propfind_addressbook_extension_props_explicit.xml")
+}
+
+func TestHandler_Propfind_AddressbookAllPropExtensionProps_BodyMatchesGolden(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	rr := doPropfind(t, h, "/alice/contacts/", "0")
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND addressbook allprop golden status = %d, want %d", got, want)
+	}
+	assertGoldenSyncXML(t, rr.Body.String(), "propfind_addressbook_allprop_extension_props.xml")
+}
+
 func TestHandler_Propfind_AddressbookExtensionProps_MonotonicOnMutations(t *testing.T) {
 	t.Parallel()
 
