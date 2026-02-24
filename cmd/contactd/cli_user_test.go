@@ -44,7 +44,7 @@ func TestCLI_UserAddAndListAndPasswdAndDelete(t *testing.T) {
 	}
 
 	store := openStoreForCLIAssert(t, dbPath)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	okOld, _, err := store.AuthenticateUser(context.Background(), "alice", "pw1")
 	if err != nil {
 		t.Fatalf("AuthenticateUser old: %v", err)

@@ -50,7 +50,7 @@ func TestService_SyncCollection_EmptyTokenInitialSyncAndInvalidToken(t *testing.
 	t.Parallel()
 
 	store := openSyncStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	userID, err := store.CreateUser(context.Background(), "alice", "hash")
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -90,7 +90,7 @@ func TestService_SyncCollection_DeltaLimitReturnsContinuationToken(t *testing.T)
 	t.Parallel()
 
 	store := openSyncStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	userID, err := store.CreateUser(context.Background(), "alice", "hash")
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -165,7 +165,7 @@ func TestService_SyncCollection_StaleTokenAfterPruneIsInvalid(t *testing.T) {
 	t.Parallel()
 
 	store := openSyncStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	userID, err := store.CreateUser(context.Background(), "alice", "hash")
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)

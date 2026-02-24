@@ -23,7 +23,7 @@ func TestOpen_AppliesSQLitePragmasAndMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open returned error: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	mode, err := store.PragmaString(ctx, "journal_mode")
 	if err != nil {
@@ -67,7 +67,7 @@ func TestStore_UIDUniquePerAddressbook_AndHrefUpsert(t *testing.T) {
 
 	ctx := context.Background()
 	store := openTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	userID, err := store.CreateUser(ctx, "alice", "bcrypt-hash")
 	if err != nil {
@@ -119,7 +119,7 @@ func TestStore_PutCard_AtomicRevisionAndJournalRollback(t *testing.T) {
 
 	ctx := context.Background()
 	store := openTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	userID, err := store.CreateUser(ctx, "alice", "bcrypt-hash")
 	if err != nil {
@@ -181,7 +181,7 @@ func TestStore_DeleteCard_AppendsDeletedChangeAndBumpsRevision(t *testing.T) {
 
 	ctx := context.Background()
 	store := openTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	userID, err := store.CreateUser(ctx, "alice", "bcrypt-hash")
 	if err != nil {
@@ -243,7 +243,7 @@ func TestStore_PruneCardChangesByAge(t *testing.T) {
 
 	ctx := context.Background()
 	store := openTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	userID, err := store.CreateUser(ctx, "alice", "bcrypt-hash")
 	if err != nil {
@@ -289,7 +289,7 @@ func TestStore_PruneCardChangesByMaxRevisions(t *testing.T) {
 
 	ctx := context.Background()
 	store := openTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	userID, err := store.CreateUser(ctx, "alice", "bcrypt-hash")
 	if err != nil {
@@ -342,7 +342,7 @@ func TestStore_ConcurrentWrites_BeginImmediate_NoLockError(t *testing.T) {
 
 	ctx := context.Background()
 	store := openTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	userID, err := store.CreateUser(ctx, "alice", "bcrypt-hash")
 	if err != nil {

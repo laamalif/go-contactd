@@ -16,7 +16,7 @@ func TestBackend_CurrentUserPrincipalAndHomeSet(t *testing.T) {
 	t.Parallel()
 
 	store := openBackendStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedUserAndBook(t, store, "alice", "contacts", "Contacts")
 
 	backend := contactcarddav.NewBackend(store)
@@ -43,7 +43,7 @@ func TestBackend_PutGetDeleteAddressObject(t *testing.T) {
 	t.Parallel()
 
 	store := openBackendStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedUserAndBook(t, store, "alice", "contacts", "Contacts")
 
 	backend := contactcarddav.NewBackend(store)
@@ -84,7 +84,7 @@ func TestBackend_PutAddressObject_ConditionalMatches(t *testing.T) {
 	t.Parallel()
 
 	store := openBackendStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedUserAndBook(t, store, "alice", "contacts", "Contacts")
 
 	backend := contactcarddav.NewBackend(store)
@@ -123,7 +123,7 @@ func TestBackend_PutAddressObject_UIDConflict(t *testing.T) {
 	t.Parallel()
 
 	store := openBackendStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedUserAndBook(t, store, "alice", "contacts", "Contacts")
 
 	backend := contactcarddav.NewBackend(store)
@@ -141,7 +141,7 @@ func TestBackend_QueryAddressObjects_NilQueryReturnsAll(t *testing.T) {
 	t.Parallel()
 
 	store := openBackendStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedUserAndBook(t, store, "alice", "contacts", "Contacts")
 
 	backend := contactcarddav.NewBackend(store)

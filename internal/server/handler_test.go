@@ -100,7 +100,7 @@ func TestHandler_CardPutGetDelete_WithBackend(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 
 	h := server.NewHandler(server.HandlerOptions{
@@ -178,7 +178,7 @@ func TestHandler_CardPut_RejectsMissingOrUnsupportedContentType(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 
 	h := server.NewHandler(server.HandlerOptions{
@@ -211,7 +211,7 @@ func TestHandler_CardPath_RejectsEncodedSlashInHref(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := newAuthedHandlerForTests(backend)
 
@@ -230,7 +230,7 @@ func TestHandler_CardPath_RejectsTraversalSegment(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := newAuthedHandlerForTests(backend)
 
@@ -249,7 +249,7 @@ func TestHandler_CardPath_AllowsSafeFlatHrefWithDots(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := newAuthedHandlerForTests(backend)
 
@@ -275,7 +275,7 @@ func TestHandler_CardDelete_IfMatchEnforced(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := server.NewHandler(server.HandlerOptions{
 		Backend: backend,
@@ -333,7 +333,7 @@ func TestHandler_CardPut_UIDConflict_ReturnsCardDAVPreconditionXML(t *testing.T)
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := server.NewHandler(server.HandlerOptions{
 		Backend: backend,
@@ -381,7 +381,7 @@ func TestHandler_CardPut_InvalidVCard_Returns400(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := server.NewHandler(server.HandlerOptions{
 		Backend: backend,
@@ -410,7 +410,7 @@ func TestHandler_CardPut_OversizeBodyReturns413(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := server.NewHandler(server.HandlerOptions{
 		Backend:         backend,
@@ -440,7 +440,7 @@ func TestHandler_CardPut_ExceedsVCardMaxButWithinRequestMax_Returns413(t *testin
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := server.NewHandler(server.HandlerOptions{
 		Backend:         backend,
@@ -471,7 +471,7 @@ func TestHandler_Propfind_PrincipalDepth0And1(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	if _, err := backend.PutAddressObject(contactcarddav.WithPrincipal(context.Background(), "alice"), "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
 		t.Fatalf("seed PutAddressObject: %v", err)
@@ -521,7 +521,7 @@ func TestHandler_Propfind_AddressbookAndCardDepthHandling(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
@@ -586,7 +586,7 @@ func TestHandler_Propfind_DepthInfinityRejected(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := server.NewHandler(server.HandlerOptions{
 		Backend: backend,
@@ -610,7 +610,7 @@ func TestHandler_Propfind_CardExplicitProps_UnknownReturns404Propstat(t *testing
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
@@ -661,7 +661,7 @@ func TestHandler_Propfind_OversizeBodyReturns413(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := server.NewHandler(server.HandlerOptions{
 		Backend:         backend,
@@ -689,11 +689,71 @@ func TestHandler_Propfind_OversizeBodyReturns413(t *testing.T) {
 	}
 }
 
+func TestHandler_Propfind_AddressbookPath_RejectsTraversalSegment(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest("PROPFIND", "/alice/../contacts/", bytes.NewBufferString(`<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("PROPFIND addressbook traversal status = %d, want %d", got, want)
+	}
+}
+
+func TestHandler_Propfind_AddressbookPath_RejectsEncodedSlashInSegment(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest("PROPFIND", "/alice%2Ftenant/contacts/", bytes.NewBufferString(`<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("PROPFIND addressbook encoded slash status = %d, want %d", got, want)
+	}
+}
+
 func TestHandler_Propfind_MalformedOversizeBodyReturns413(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := server.NewHandler(server.HandlerOptions{
 		Backend:         backend,
@@ -725,7 +785,7 @@ func TestHandler_Propfind_AddressbookExplicitExtensionProps(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := server.NewHandler(server.HandlerOptions{
 		Backend: backend,
@@ -775,7 +835,7 @@ func TestHandler_Propfind_AddressbookExtensionProps_MonotonicOnMutations(t *test
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
 	h := server.NewHandler(server.HandlerOptions{
@@ -825,7 +885,7 @@ func TestHandler_Propfind_AddressbookExtensionProps_MonotonicOnMutations(t *test
 	}
 	sync2, ctag2 := readProps()
 
-	if !(ctag1 > ctag0 && ctag2 > ctag1) {
+	if ctag1 <= ctag0 || ctag2 <= ctag1 {
 		t.Fatalf("getctag not monotonic: ctag0=%d ctag1=%d ctag2=%d", ctag0, ctag1, ctag2)
 	}
 	if sync0 == sync1 || sync1 == sync2 || sync0 == sync2 {
@@ -837,7 +897,7 @@ func TestHandler_Report_UnknownTypeReturns501(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := server.NewHandler(server.HandlerOptions{
 		Backend: backend,
@@ -867,7 +927,7 @@ func TestHandler_Report_OversizeBodyReturns413(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := server.NewHandler(server.HandlerOptions{
 		Backend:         backend,
@@ -894,11 +954,69 @@ func TestHandler_Report_OversizeBodyReturns413(t *testing.T) {
 	}
 }
 
+func TestHandler_Report_AddressbookPath_RejectsTraversalSegment(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest("REPORT", "/alice/../contacts/", bytes.NewBufferString(`<?xml version="1.0"?><D:sync-collection xmlns:D="DAV:"></D:sync-collection>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("REPORT addressbook traversal status = %d, want %d", got, want)
+	}
+}
+
+func TestHandler_Report_AddressbookPath_RejectsEncodedSlashInSegment(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest("REPORT", "/alice/contacts%2Fextra/", bytes.NewBufferString(`<?xml version="1.0"?><D:sync-collection xmlns:D="DAV:"></D:sync-collection>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("REPORT addressbook encoded slash status = %d, want %d", got, want)
+	}
+}
+
 func TestHandler_Report_MalformedOversizeBodyReturns413(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	h := server.NewHandler(server.HandlerOptions{
 		Backend:         backend,
@@ -929,7 +1047,7 @@ func TestHandler_Report_AddressbookMultiget_ReturnsSubsetAnd404(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
@@ -1010,7 +1128,7 @@ func TestHandler_Report_AddressbookQuery_ReturnsCardsWithAddressData(t *testing.
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
@@ -1081,7 +1199,7 @@ func TestHandler_Report_SyncCollection_EmptyTokenReturnsSyncTokenAndItems(t *tes
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
@@ -1126,7 +1244,7 @@ func TestHandler_Report_SyncCollection_InvalidTokenReturns403ValidSyncTokenError
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 
 	h := server.NewHandler(server.HandlerOptions{
@@ -1167,7 +1285,7 @@ func TestHandler_Report_SyncCollection_LimitUsesContinuationToken(t *testing.T) 
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
@@ -1239,7 +1357,7 @@ func TestHandler_Report_SyncCollection_StalePrunedTokenReturns403ValidSyncTokenE
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
@@ -1295,7 +1413,7 @@ func TestHandler_Report_SyncCollection_Limit_BodyMatchesGolden(t *testing.T) {
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
@@ -1346,7 +1464,7 @@ func TestHandler_Report_SyncCollection_InvalidToken_BodyMatchesGolden(t *testing
 	t.Parallel()
 
 	store, backend := openServerBackend(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
 
 	h := server.NewHandler(server.HandlerOptions{

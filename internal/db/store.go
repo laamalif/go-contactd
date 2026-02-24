@@ -188,7 +188,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []User
 	for rows.Next() {
@@ -316,7 +316,7 @@ func (s *Store) ListAddressbooksByUsername(ctx context.Context, username string)
 	if err != nil {
 		return nil, fmt.Errorf("list addressbooks by username: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []Addressbook
 	for rows.Next() {
@@ -398,7 +398,7 @@ func (s *Store) ListCards(ctx context.Context, addressbookID int64) ([]Card, err
 	if err != nil {
 		return nil, fmt.Errorf("list cards: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []Card
 	for rows.Next() {
@@ -464,7 +464,7 @@ func (s *Store) CardChangeRevisions(ctx context.Context, addressbookID int64) ([
 	if err != nil {
 		return nil, fmt.Errorf("select card_change revisions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var revs []int64
 	for rows.Next() {
@@ -496,7 +496,7 @@ func (s *Store) ListCardChangesSince(ctx context.Context, addressbookID int64, a
 	if err != nil {
 		return nil, fmt.Errorf("list card_changes since: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []CardChange
 	for rows.Next() {
@@ -753,7 +753,7 @@ func (s *Store) withImmediateTx(ctx context.Context, fn func(*sql.Conn) error) (
 	if err != nil {
 		return fmt.Errorf("db conn: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if err := s.applyConnPragmas(ctx, conn); err != nil {
 		return err

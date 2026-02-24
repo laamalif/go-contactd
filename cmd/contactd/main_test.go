@@ -37,7 +37,7 @@ func TestPrepareServeRuntime_SeedsEmptyDBAndDefaultAddressbook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareServeRuntime: %v", err)
 	}
-	defer rt.close()
+	defer func() { _ = rt.close() }()
 
 	ok, _, err := rt.store.AuthenticateUser(context.Background(), "alice", "secret")
 	if err != nil {
@@ -87,7 +87,7 @@ func TestPrepareServeRuntime_DoesNotOverwriteExistingUsersWithoutForceSeed(t *te
 	if err != nil {
 		t.Fatalf("prepareServeRuntime second: %v", err)
 	}
-	defer rt2.close()
+	defer func() { _ = rt2.close() }()
 
 	okOld, _, err := rt2.store.AuthenticateUser(context.Background(), "alice", "pw1")
 	if err != nil {

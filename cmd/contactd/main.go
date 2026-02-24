@@ -32,7 +32,7 @@ func run(args []string, stdout, stderr *os.File) int {
 
 func runMain(args []string, env map[string]string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: go-contactd <subcommand>")
+		_, _ = fmt.Fprintln(stderr, "usage: go-contactd <subcommand>")
 		return 2
 	}
 
@@ -42,11 +42,11 @@ func runMain(args []string, env map[string]string, stdout, stderr io.Writer) int
 	case "user":
 		return runUser(args[1:], env, stdout, stderr)
 	case "version":
-		fmt.Fprintln(stdout, "go-contactd dev")
+		_, _ = fmt.Fprintln(stdout, "go-contactd dev")
 		return 0
 	default:
-		fmt.Fprintf(stderr, "unknown subcommand: %s\n", args[0])
-		fmt.Fprintln(stderr, "usage: go-contactd <subcommand>")
+		_, _ = fmt.Fprintf(stderr, "unknown subcommand: %s\n", args[0])
+		_, _ = fmt.Fprintln(stderr, "usage: go-contactd <subcommand>")
 		return 2
 	}
 }
@@ -54,10 +54,10 @@ func runMain(args []string, env map[string]string, stdout, stderr io.Writer) int
 func runServe(args []string, env map[string]string, stderr io.Writer) int {
 	rt, err := prepareServeRuntime(context.Background(), args, env, stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "startup error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "startup error: %v\n", err)
 		return 2
 	}
-	defer rt.close()
+	defer func() { _ = rt.close() }()
 
 	rt.logger.Info("server starting", "event", "server starting", "listen", rt.cfg.ListenAddr, "db_path", rt.cfg.DBPath)
 
@@ -75,7 +75,7 @@ func runServe(args []string, env map[string]string, stderr io.Writer) int {
 
 func runUser(args []string, env map[string]string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: go-contactd user <add|list|delete|passwd>")
+		_, _ = fmt.Fprintln(stderr, "usage: go-contactd user <add|list|delete|passwd>")
 		return 2
 	}
 
@@ -89,8 +89,8 @@ func runUser(args []string, env map[string]string, stdout, stderr io.Writer) int
 	case "passwd":
 		return runUserPasswd(args[1:], env, stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "unknown user subcommand: %s\n", args[0])
-		fmt.Fprintln(stderr, "usage: go-contactd user <add|list|delete|passwd>")
+		_, _ = fmt.Fprintf(stderr, "unknown user subcommand: %s\n", args[0])
+		_, _ = fmt.Fprintln(stderr, "usage: go-contactd user <add|list|delete|passwd>")
 		return 2
 	}
 }
@@ -110,49 +110,49 @@ func runUserAdd(args []string, env map[string]string, stdout, stderr io.Writer) 
 	fs.StringVar(&bookSlug, "default-book-slug", bookSlug, "default addressbook slug")
 	fs.StringVar(&bookName, "default-book-name", bookName, "default addressbook name")
 	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(stderr, "usage error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
+		_, _ = fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
 		return 2
 	}
 	if err := validateUsername(username); err != nil {
-		fmt.Fprintf(stderr, "usage error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
 		return 2
 	}
 	if password == "" {
-		fmt.Fprintln(stderr, "usage error: --password is required")
+		_, _ = fmt.Fprintln(stderr, "usage error: --password is required")
 		return 2
 	}
 
 	store, err := db.Open(context.Background(), dbPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "db error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 		return 1
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		fmt.Fprintf(stderr, "db error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 		return 1
 	}
 	id, err := store.CreateUser(context.Background(), username, string(hash))
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			fmt.Fprintf(stderr, "usage error: username already exists: %s\n", username)
+			_, _ = fmt.Fprintf(stderr, "usage error: username already exists: %s\n", username)
 			return 2
 		}
-		fmt.Fprintf(stderr, "db error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 		return 1
 	}
 	if _, _, err := store.EnsureAddressbook(context.Background(), id, bookSlug, bookName); err != nil {
-		fmt.Fprintf(stderr, "db error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "user added: id=%d username=%s\n", id, username)
+	_, _ = fmt.Fprintf(stdout, "user added: id=%d username=%s\n", id, username)
 	return 0
 }
 
@@ -163,27 +163,27 @@ func runUserList(args []string, env map[string]string, stdout, stderr io.Writer)
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
 	fs.StringVar(&format, "format", format, "table|json")
 	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(stderr, "usage error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
+		_, _ = fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
 		return 2
 	}
 	if format != "table" && format != "json" {
-		fmt.Fprintf(stderr, "usage error: invalid --format %q\n", format)
+		_, _ = fmt.Fprintf(stderr, "usage error: invalid --format %q\n", format)
 		return 2
 	}
 
 	store, err := db.Open(context.Background(), dbPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "db error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 		return 1
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	users, err := store.ListUsers(context.Background())
 	if err != nil {
-		fmt.Fprintf(stderr, "db error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 		return 1
 	}
 
@@ -199,15 +199,15 @@ func runUserList(args []string, env map[string]string, stdout, stderr io.Writer)
 		enc := json.NewEncoder(stdout)
 		enc.SetEscapeHTML(false)
 		if err := enc.Encode(out); err != nil {
-			fmt.Fprintf(stderr, "internal error: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "internal error: %v\n", err)
 			return 1
 		}
 		return 0
 	}
 
-	fmt.Fprintln(stdout, "ID\tUSERNAME")
+	_, _ = fmt.Fprintln(stdout, "ID\tUSERNAME")
 	for _, u := range users {
-		fmt.Fprintf(stdout, "%d\t%s\n", u.ID, u.Username)
+		_, _ = fmt.Fprintf(stdout, "%d\t%s\n", u.ID, u.Username)
 	}
 	return 0
 }
@@ -221,24 +221,24 @@ func runUserDelete(args []string, env map[string]string, stdout, stderr io.Write
 	fs.StringVar(&username, "username", "", "username")
 	fs.Int64Var(&id, "id", 0, "user id")
 	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(stderr, "usage error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
+		_, _ = fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
 		return 2
 	}
 	if (username == "" && id == 0) || (username != "" && id != 0) {
-		fmt.Fprintln(stderr, "usage error: specify exactly one of --username or --id")
+		_, _ = fmt.Fprintln(stderr, "usage error: specify exactly one of --username or --id")
 		return 2
 	}
 
 	store, err := db.Open(context.Background(), dbPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "db error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 		return 1
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if username != "" {
 		err = store.DeleteUserByUsername(context.Background(), username)
@@ -247,17 +247,17 @@ func runUserDelete(args []string, env map[string]string, stdout, stderr io.Write
 	}
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			fmt.Fprintln(stderr, "not found")
+			_, _ = fmt.Fprintln(stderr, "not found")
 			return 3
 		}
-		fmt.Fprintf(stderr, "db error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 		return 1
 	}
 
 	if username != "" {
-		fmt.Fprintf(stdout, "user deleted: username=%s\n", username)
+		_, _ = fmt.Fprintf(stdout, "user deleted: username=%s\n", username)
 	} else {
-		fmt.Fprintf(stdout, "user deleted: id=%d\n", id)
+		_, _ = fmt.Fprintf(stdout, "user deleted: id=%d\n", id)
 	}
 	return 0
 }
@@ -273,32 +273,32 @@ func runUserPasswd(args []string, env map[string]string, stdout, stderr io.Write
 	fs.Int64Var(&id, "id", 0, "user id")
 	fs.StringVar(&password, "password", "", "password")
 	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(stderr, "usage error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
+		_, _ = fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
 		return 2
 	}
 	if (username == "" && id == 0) || (username != "" && id != 0) {
-		fmt.Fprintln(stderr, "usage error: specify exactly one of --username or --id")
+		_, _ = fmt.Fprintln(stderr, "usage error: specify exactly one of --username or --id")
 		return 2
 	}
 	if password == "" {
-		fmt.Fprintln(stderr, "usage error: --password is required")
+		_, _ = fmt.Fprintln(stderr, "usage error: --password is required")
 		return 2
 	}
 
 	store, err := db.Open(context.Background(), dbPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "db error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 		return 1
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		fmt.Fprintf(stderr, "db error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 		return 1
 	}
 	if username != "" {
@@ -306,10 +306,10 @@ func runUserPasswd(args []string, env map[string]string, stdout, stderr io.Write
 		userID, err = store.UserIDByUsername(context.Background(), username)
 		if err != nil {
 			if errors.Is(err, db.ErrNotFound) {
-				fmt.Fprintln(stderr, "not found")
+				_, _ = fmt.Fprintln(stderr, "not found")
 				return 3
 			}
-			fmt.Fprintf(stderr, "db error: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 			return 1
 		}
 		err = store.SetUserPasswordHash(context.Background(), userID, string(hash))
@@ -318,17 +318,17 @@ func runUserPasswd(args []string, env map[string]string, stdout, stderr io.Write
 	}
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			fmt.Fprintln(stderr, "not found")
+			_, _ = fmt.Fprintln(stderr, "not found")
 			return 3
 		}
-		fmt.Fprintf(stderr, "db error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 		return 1
 	}
 
 	if username != "" {
-		fmt.Fprintf(stdout, "user password updated: username=%s\n", username)
+		_, _ = fmt.Fprintf(stdout, "user password updated: username=%s\n", username)
 	} else {
-		fmt.Fprintf(stdout, "user password updated: id=%d\n", id)
+		_, _ = fmt.Fprintf(stdout, "user password updated: id=%d\n", id)
 	}
 	return 0
 }

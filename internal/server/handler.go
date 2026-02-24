@@ -51,16 +51,16 @@ type handler struct {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch {
-	case r.URL.Path == "/.well-known/carddav":
+	switch r.URL.Path {
+	case "/.well-known/carddav":
 		http.Redirect(w, r, "/", http.StatusPermanentRedirect)
 		return
-	case r.URL.Path == "/healthz":
+	case "/healthz":
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 		return
-	case r.URL.Path == "/readyz":
+	case "/readyz":
 		h.serveReadyz(w, r)
 		return
 	}
