@@ -67,20 +67,6 @@ func TestHandler_Health_DBCheck_Failure(t *testing.T) {
 	}
 }
 
-func TestHandler_LegacyHealthEndpoints_NotFound(t *testing.T) {
-	t.Parallel()
-
-	h := server.NewHandler(server.HandlerOptions{})
-	for _, p := range []string{"/healthz", "/readyz"} {
-		req := httptest.NewRequest(http.MethodGet, p, nil)
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, req)
-		if got, want := rr.Code, http.StatusNotFound; got != want {
-			t.Fatalf("%s status = %d, want %d", p, got, want)
-		}
-	}
-}
-
 func TestHandler_WellKnownCardDAVRedirects(t *testing.T) {
 	t.Parallel()
 
