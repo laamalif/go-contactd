@@ -5,8 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${ROOT_DIR}"
 
 DIST_DIR="${DIST_DIR:-dist}"
-BIN_NAME="${BIN_NAME:-go-contactd}"
+BIN_NAME="${BIN_NAME:-contactd}"
+ADMIN_BIN_NAME="${ADMIN_BIN_NAME:-contactctl}"
+COMPAT_BIN_NAME="${COMPAT_BIN_NAME:-go-contactd}"
 PKG="${PKG:-./cmd/contactd}"
+WRITE_ALIAS_SYMLINKS="${WRITE_ALIAS_SYMLINKS:-1}"
 
 DEFAULT_TARGETS=(
   "linux/amd64"
@@ -81,6 +84,13 @@ for target in "${TARGETS[@]}"; do
   "${ROOT_DIR}/build_dist.sh" --strip -o "${out}" "${PKG}"
 
   checksum_line "${out}" >>"${checksum_file}"
+
+  if [[ "${WRITE_ALIAS_SYMLINKS}" == "1" ]]; then
+    admin_alias="${DIST_DIR}/${ADMIN_BIN_NAME}_${safe_version}_${goos}_${goarch}"
+    compat_alias="${DIST_DIR}/${COMPAT_BIN_NAME}_${safe_version}_${goos}_${goarch}"
+    ln -sf "$(basename "${out}")" "${admin_alias}"
+    ln -sf "$(basename "${out}")" "${compat_alias}"
+  fi
 done
 
 printf '[release] wrote %s\n' "${checksum_file}"
