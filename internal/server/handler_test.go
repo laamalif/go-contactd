@@ -203,6 +203,54 @@ func TestHandler_CardPut_RejectsMissingOrUnsupportedContentType(t *testing.T) {
 	}
 }
 
+func TestHandler_CardDelete_IfMatchEnforced(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	putReq := httptest.NewRequest(http.MethodPut, "/alice/contacts/a.vcf", bytes.NewBufferString(vcardBody("uid-a", "Alice A")))
+	putReq.Header.Set("Content-Type", "text/vcard")
+	putReq.SetBasicAuth("alice", "secret")
+	putRes := httptest.NewRecorder()
+	h.ServeHTTP(putRes, putReq)
+	if got, want := putRes.Code, http.StatusCreated; got != want {
+		t.Fatalf("PUT create status = %d, want %d", got, want)
+	}
+	etag := putRes.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("missing ETag on create")
+	}
+
+	delBad := httptest.NewRequest(http.MethodDelete, "/alice/contacts/a.vcf", nil)
+	delBad.Header.Set("If-Match", `"wrong-etag"`)
+	delBad.SetBasicAuth("alice", "secret")
+	delBadRes := httptest.NewRecorder()
+	h.ServeHTTP(delBadRes, delBad)
+	if got, want := delBadRes.Code, http.StatusPreconditionFailed; got != want {
+		t.Fatalf("DELETE wrong If-Match status = %d, want %d", got, want)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/alice/contacts/a.vcf", nil)
+	getReq.SetBasicAuth("alice", "secret")
+	getRes := httptest.NewRecorder()
+	h.ServeHTTP(getRes, getReq)
+	if got, want := getRes.Code, http.StatusOK; got != want {
+		t.Fatalf("GET after failed delete status = %d, want %d", got, want)
+	}
+
+	delGood := httptest.NewRequest(http.MethodDelete, "/alice/contacts/a.vcf", nil)
+	delGood.Header.Set("If-Match", etag)
+	delGood.SetBasicAuth("alice", "secret")
+	delGoodRes := httptest.NewRecorder()
+	h.ServeHTTP(delGoodRes, delGood)
+	if got, want := delGoodRes.Code, http.StatusNoContent; got != want {
+		t.Fatalf("DELETE matching If-Match status = %d, want %d", got, want)
+	}
+}
+
 func TestHandler_Propfind_PrincipalDepth0And1(t *testing.T) {
 	t.Parallel()
 

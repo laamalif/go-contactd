@@ -449,6 +449,27 @@ func (h *handler) handleCardPut(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) handleCardDelete(w http.ResponseWriter, r *http.Request) {
+	if ifMatch := webdav.ConditionalMatch(r.Header.Get("If-Match")); ifMatch.IsSet() {
+		ao, err := h.opts.Backend.GetAddressObject(r.Context(), r.URL.Path, nil)
+		if err != nil {
+			writeBackendError(w, err)
+			return
+		}
+		currentETag, err := webdav.ConditionalMatch(ao.ETag).ETag()
+		if err != nil {
+			http.Error(w, "invalid ETag", http.StatusInternalServerError)
+			return
+		}
+		ok, err := ifMatch.MatchETag(currentETag)
+		if err != nil {
+			http.Error(w, "bad If-Match", http.StatusBadRequest)
+			return
+		}
+		if !ok {
+			http.Error(w, http.StatusText(http.StatusPreconditionFailed), http.StatusPreconditionFailed)
+			return
+		}
+	}
 	if err := h.opts.Backend.DeleteAddressObject(r.Context(), r.URL.Path); err != nil {
 		writeBackendError(w, err)
 		return
