@@ -3,12 +3,15 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/emersion/go-vcard"
+	gocarddav "github.com/emersion/go-webdav/carddav"
 	contactcarddav "github.com/laamalif/go-contactd/internal/carddav"
 	"github.com/laamalif/go-contactd/internal/db"
 	"github.com/laamalif/go-contactd/internal/server"
@@ -200,6 +203,115 @@ func TestHandler_CardPut_RejectsMissingOrUnsupportedContentType(t *testing.T) {
 	}
 }
 
+func TestHandler_Propfind_PrincipalDepth0And1(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	if _, err := backend.PutAddressObject(contactcarddav.WithPrincipal(context.Background(), "alice"), "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject: %v", err)
+	}
+	h := newAuthedHandlerForTests(backend)
+
+	res0 := doPropfind(t, h, "/alice/", "0")
+	if got, want := res0.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("principal depth0 status = %d, want %d", got, want)
+	}
+	if ct := res0.Header().Get("Content-Type"); ct != "application/xml; charset=utf-8" {
+		t.Fatalf("principal depth0 content-type = %q", ct)
+	}
+	body0 := res0.Body.String()
+	if !strings.Contains(body0, "current-user-principal") || !strings.Contains(body0, "addressbook-home-set") {
+		t.Fatalf("principal depth0 body missing principal props: %q", body0)
+	}
+	hrefs0 := mustCollectHrefs(t, body0)
+	if len(hrefs0) != 1 || hrefs0[0] != "/alice/" {
+		t.Fatalf("principal depth0 hrefs = %v, want [/alice/]", hrefs0)
+	}
+
+	res1 := doPropfind(t, h, "/alice/", "1")
+	if got, want := res1.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("principal depth1 status = %d, want %d", got, want)
+	}
+	hrefs1 := mustCollectHrefs(t, res1.Body.String())
+	if !containsString(hrefs1, "/alice/") || !containsString(hrefs1, "/alice/contacts/") {
+		t.Fatalf("principal depth1 hrefs = %v, want principal + addressbook", hrefs1)
+	}
+	if containsString(hrefs1, "/alice/contacts/a.vcf") {
+		t.Fatalf("principal depth1 hrefs leaked grandchild card: %v", hrefs1)
+	}
+}
+
+func TestHandler_Propfind_AddressbookAndCardDepthHandling(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject: %v", err)
+	}
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/b.vcf", mustSampleCard("uid-b", "Alice B"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject: %v", err)
+	}
+	h := newAuthedHandlerForTests(backend)
+
+	ab0 := doPropfind(t, h, "/alice/contacts/", "0")
+	if got, want := ab0.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("addressbook depth0 status = %d, want %d", got, want)
+	}
+	hrefsAb0 := mustCollectHrefs(t, ab0.Body.String())
+	if len(hrefsAb0) != 1 || hrefsAb0[0] != "/alice/contacts/" {
+		t.Fatalf("addressbook depth0 hrefs = %v, want [/alice/contacts/]", hrefsAb0)
+	}
+	if !strings.Contains(ab0.Body.String(), "addressbook") {
+		t.Fatalf("addressbook depth0 body missing addressbook resource type: %q", ab0.Body.String())
+	}
+
+	ab1 := doPropfind(t, h, "/alice/contacts/", "1")
+	if got, want := ab1.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("addressbook depth1 status = %d, want %d", got, want)
+	}
+	hrefsAb1 := mustCollectHrefs(t, ab1.Body.String())
+	if !containsString(hrefsAb1, "/alice/contacts/") || !containsString(hrefsAb1, "/alice/contacts/a.vcf") || !containsString(hrefsAb1, "/alice/contacts/b.vcf") {
+		t.Fatalf("addressbook depth1 hrefs = %v, want collection + children", hrefsAb1)
+	}
+
+	card0 := doPropfind(t, h, "/alice/contacts/a.vcf", "0")
+	if got, want := card0.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("card depth0 status = %d, want %d", got, want)
+	}
+	hrefsCard0 := mustCollectHrefs(t, card0.Body.String())
+	if len(hrefsCard0) != 1 || hrefsCard0[0] != "/alice/contacts/a.vcf" {
+		t.Fatalf("card depth0 hrefs = %v, want only card", hrefsCard0)
+	}
+	if !strings.Contains(card0.Body.String(), "getetag") {
+		t.Fatalf("card depth0 body missing getetag: %q", card0.Body.String())
+	}
+
+	card1 := doPropfind(t, h, "/alice/contacts/a.vcf", "1")
+	hrefsCard1 := mustCollectHrefs(t, card1.Body.String())
+	if len(hrefsCard1) != 1 || hrefsCard1[0] != "/alice/contacts/a.vcf" {
+		t.Fatalf("card depth1 hrefs = %v, want same as depth0", hrefsCard1)
+	}
+}
+
+func TestHandler_Propfind_DepthInfinityRejected(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	rr := doPropfind(t, h, "/alice/contacts/", "infinity")
+	if got, want := rr.Code, http.StatusForbidden; got != want {
+		t.Fatalf("depth infinity status = %d, want %d", got, want)
+	}
+}
+
 func openServerBackend(t *testing.T) (*db.Store, *contactcarddav.Backend) {
 	t.Helper()
 	store, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "contactd.sqlite"))
@@ -207,6 +319,19 @@ func openServerBackend(t *testing.T) (*db.Store, *contactcarddav.Backend) {
 		t.Fatalf("db.Open: %v", err)
 	}
 	return store, contactcarddav.NewBackend(store)
+}
+
+func newAuthedHandlerForTests(backend *contactcarddav.Backend) http.Handler {
+	return server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
 }
 
 func seedServerUserBook(t *testing.T, store *db.Store, username, slug, name string) {
@@ -221,13 +346,55 @@ func seedServerUserBook(t *testing.T, store *db.Store, username, slug, name stri
 }
 
 func vcardBody(uid, fn string) string {
-	card := make(vcard.Card)
-	card.SetValue(vcard.FieldVersion, "3.0")
-	card.SetValue(vcard.FieldUID, uid)
-	card.SetValue(vcard.FieldFormattedName, fn)
+	card := mustSampleCard(uid, fn)
 	var buf bytes.Buffer
 	if err := vcard.NewEncoder(&buf).Encode(card); err != nil {
 		panic(err)
 	}
 	return buf.String()
+}
+
+func mustSampleCard(uid, fn string) vcard.Card {
+	card := make(vcard.Card)
+	card.SetValue(vcard.FieldVersion, "3.0")
+	card.SetValue(vcard.FieldUID, uid)
+	card.SetValue(vcard.FieldFormattedName, fn)
+	return card
+}
+
+func doPropfind(t *testing.T, h http.Handler, target, depth string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("PROPFIND", target, bytes.NewBufferString(`<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", depth)
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
+}
+
+func mustCollectHrefs(t *testing.T, body string) []string {
+	t.Helper()
+	var doc struct {
+		Responses []struct {
+			Href string `xml:"href"`
+		} `xml:"response"`
+	}
+	if err := xml.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("xml.Unmarshal failed: %v; body=%q", err, body)
+	}
+	out := make([]string, 0, len(doc.Responses))
+	for _, r := range doc.Responses {
+		out = append(out, r.Href)
+	}
+	return out
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }

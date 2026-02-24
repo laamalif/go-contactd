@@ -15,6 +15,7 @@ import (
 	"github.com/emersion/go-vcard"
 	webdav "github.com/emersion/go-webdav"
 	gocarddav "github.com/emersion/go-webdav/carddav"
+	"github.com/laamalif/go-contactd/internal/davxml"
 )
 
 type HandlerOptions struct {
@@ -60,6 +61,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case r.Method == "PROPFIND" && h.opts.Backend != nil:
+		h.handlePropfind(w, r)
+		return
 	case h.opts.Backend != nil && isCardPath(r.URL.Path):
 		h.serveCardPath(w, r)
 		return
@@ -131,6 +135,182 @@ func (h *handler) serveCardPath(w http.ResponseWriter, r *http.Request) {
 		h.handleCardDelete(w, r)
 	default:
 		http.NotFound(w, r)
+	}
+}
+
+func (h *handler) handlePropfind(w http.ResponseWriter, r *http.Request) {
+	depth, ok := parsePropfindDepth(w, r)
+	if !ok {
+		return
+	}
+
+	ms, err := h.buildPropfindMultiStatus(r.Context(), r.URL.Path, depth)
+	if err != nil {
+		writeBackendError(w, err)
+		return
+	}
+
+	body, err := davxml.Marshal(ms)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.WriteHeader(http.StatusMultiStatus)
+	_, _ = w.Write(body)
+}
+
+func parsePropfindDepth(w http.ResponseWriter, r *http.Request) (int, bool) {
+	depth := strings.TrimSpace(r.Header.Get("Depth"))
+	switch depth {
+	case "", "0":
+		return 0, true
+	case "1":
+		return 1, true
+	case "infinity":
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return 0, false
+	default:
+		http.Error(w, "bad depth", http.StatusBadRequest)
+		return 0, false
+	}
+}
+
+func (h *handler) buildPropfindMultiStatus(ctx context.Context, p string, depth int) (davxml.MultiStatus, error) {
+	switch classifyDAVPath(p) {
+	case davResourcePrincipal:
+		return h.propfindPrincipal(ctx, p, depth)
+	case davResourceAddressbook:
+		return h.propfindAddressbook(ctx, p, depth)
+	case davResourceCard:
+		return h.propfindCard(ctx, p)
+	default:
+		return davxml.MultiStatus{}, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("resource not found"))
+	}
+}
+
+type davResourceKind int
+
+const (
+	davResourceUnknown davResourceKind = iota
+	davResourcePrincipal
+	davResourceAddressbook
+	davResourceCard
+)
+
+func classifyDAVPath(p string) davResourceKind {
+	if strings.TrimSpace(p) == "/" {
+		return davResourceUnknown
+	}
+	clean := path.Clean("/" + strings.TrimSpace(p))
+	if clean == "/" {
+		return davResourceUnknown
+	}
+	parts := strings.Split(strings.Trim(clean, "/"), "/")
+	hasTrailingSlash := strings.HasSuffix(p, "/")
+	switch len(parts) {
+	case 1:
+		if hasTrailingSlash {
+			return davResourcePrincipal
+		}
+	case 2:
+		if hasTrailingSlash {
+			return davResourceAddressbook
+		}
+	case 3:
+		return davResourceCard
+	}
+	return davResourceUnknown
+}
+
+func (h *handler) propfindPrincipal(ctx context.Context, reqPath string, depth int) (davxml.MultiStatus, error) {
+	principal, err := h.opts.Backend.CurrentUserPrincipal(ctx)
+	if err != nil {
+		return davxml.MultiStatus{}, err
+	}
+	if principal != reqPath {
+		return davxml.MultiStatus{}, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("principal not found"))
+	}
+
+	responses := []davxml.Response{principalPropfindResponse(principal)}
+	if depth == 1 {
+		books, err := h.opts.Backend.ListAddressBooks(ctx)
+		if err != nil {
+			return davxml.MultiStatus{}, err
+		}
+		for _, ab := range books {
+			responses = append(responses, addressbookPropfindResponse(ab))
+		}
+	}
+	return davxml.MultiStatus{Responses: responses}, nil
+}
+
+func (h *handler) propfindAddressbook(ctx context.Context, reqPath string, depth int) (davxml.MultiStatus, error) {
+	ab, err := h.opts.Backend.GetAddressBook(ctx, reqPath)
+	if err != nil {
+		return davxml.MultiStatus{}, err
+	}
+	responses := []davxml.Response{addressbookPropfindResponse(*ab)}
+	if depth == 1 {
+		aos, err := h.opts.Backend.ListAddressObjects(ctx, reqPath, nil)
+		if err != nil {
+			return davxml.MultiStatus{}, err
+		}
+		for _, ao := range aos {
+			responses = append(responses, cardPropfindResponse(ao))
+		}
+	}
+	return davxml.MultiStatus{Responses: responses}, nil
+}
+
+func (h *handler) propfindCard(ctx context.Context, reqPath string) (davxml.MultiStatus, error) {
+	ao, err := h.opts.Backend.GetAddressObject(ctx, reqPath, nil)
+	if err != nil {
+		return davxml.MultiStatus{}, err
+	}
+	return davxml.MultiStatus{Responses: []davxml.Response{cardPropfindResponse(*ao)}}, nil
+}
+
+func principalPropfindResponse(href string) davxml.Response {
+	return davxml.Response{
+		Href: href,
+		PropStats: []davxml.PropStat{
+			davxml.PropStatOK(davxml.Prop{
+				CurrentUserPrincipal: &davxml.Href{Href: href},
+				PrincipalURL:         &davxml.Href{Href: href},
+				AddressbookHomeSet:   &davxml.Href{Href: href},
+				ResourceType: &davxml.ResourceType{
+					Collection: davxml.DAVCollection(),
+					Principal:  davxml.DAVPrincipal(),
+				},
+			}),
+		},
+	}
+}
+
+func addressbookPropfindResponse(ab gocarddav.AddressBook) davxml.Response {
+	return davxml.Response{
+		Href: ab.Path,
+		PropStats: []davxml.PropStat{
+			davxml.PropStatOK(davxml.Prop{
+				ResourceType: &davxml.ResourceType{
+					Collection:  davxml.DAVCollection(),
+					Addressbook: davxml.CardDAVAddressbook(),
+				},
+			}),
+		},
+	}
+}
+
+func cardPropfindResponse(ao gocarddav.AddressObject) davxml.Response {
+	return davxml.Response{
+		Href: ao.Path,
+		PropStats: []davxml.PropStat{
+			davxml.PropStatOK(davxml.Prop{
+				ResourceType: &davxml.ResourceType{},
+				GetETag:      ao.ETag,
+			}),
+		},
 	}
 }
 
