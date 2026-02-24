@@ -151,41 +151,11 @@ func TestLoadServeConfig_ServeAliasesAndPortConvenience(t *testing.T) {
 			},
 		},
 		{
-			name: "listen alias",
-			args: []string{"--listen", ":7070"},
-			want: func(t *testing.T, cfg config.ServeConfig) {
-				t.Helper()
-				if got, want := cfg.ListenAddr, ":7070"; got != want {
-					t.Fatalf("ListenAddr=%q want %q", got, want)
-				}
-			},
-		},
-		{
-			name: "bind alias",
-			args: []string{"--bind", "127.0.0.1:7071"},
-			want: func(t *testing.T, cfg config.ServeConfig) {
-				t.Helper()
-				if got, want := cfg.ListenAddr, "127.0.0.1:7071"; got != want {
-					t.Fatalf("ListenAddr=%q want %q", got, want)
-				}
-			},
-		},
-		{
 			name: "short d",
 			args: []string{"-d", "/tmp/short.sqlite"},
 			want: func(t *testing.T, cfg config.ServeConfig) {
 				t.Helper()
 				if got, want := cfg.DBPath, "/tmp/short.sqlite"; got != want {
-					t.Fatalf("DBPath=%q want %q", got, want)
-				}
-			},
-		},
-		{
-			name: "db alias",
-			args: []string{"--db", "/tmp/x.sqlite"},
-			want: func(t *testing.T, cfg config.ServeConfig) {
-				t.Helper()
-				if got, want := cfg.DBPath, "/tmp/x.sqlite"; got != want {
 					t.Fatalf("DBPath=%q want %q", got, want)
 				}
 			},
@@ -222,6 +192,24 @@ func TestLoadServeConfig_ServeAliasesAndPortConvenience(t *testing.T) {
 			}
 			tc.want(t, cfg)
 		})
+	}
+}
+
+func TestLoadServeConfig_LegacyLongAliasesRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{
+		{"--listen", ":7070"},
+		{"--bind", ":7070"},
+		{"--addr", ":7070"},
+		{"--db", "/tmp/x.sqlite"},
+		{"--url", "https://example.test"},
+		{"--level", "debug"},
+		{"--trust-proxy"},
+	} {
+		if _, err := config.LoadServeConfig(args, map[string]string{}); err == nil {
+			t.Fatalf("LoadServeConfig(%v) error=nil, want unknown flag", args)
+		}
 	}
 }
 

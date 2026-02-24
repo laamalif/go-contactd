@@ -302,6 +302,35 @@ func TestRunMain_DaemonRootHelp(t *testing.T) {
 			if !strings.Contains(out, "--listen-addr") || !strings.Contains(out, "--db-path") || !strings.Contains(out, "contactctl user") {
 				t.Fatalf("stdout missing daemon/help details: %q", out)
 			}
+			for _, forbidden := range []string{"--listen addr", "--bind addr", "--addr addr", "--db path"} {
+				if strings.Contains(out, forbidden) {
+					t.Fatalf("stdout should not advertise daemon alias %q: %q", forbidden, out)
+				}
+			}
+			for _, wantEnv := range []string{
+				"CONTACTD_LISTEN_ADDR",
+				"PORT",
+				"CONTACTD_DB_PATH",
+				"CONTACTD_BASE_URL",
+				"CONTACTD_LOG_LEVEL",
+				"CONTACTD_LOG_FORMAT",
+				"CONTACTD_TRUST_PROXY_HEADERS",
+				"CONTACTD_REQUEST_MAX_BYTES",
+				"CONTACTD_VCARD_MAX_BYTES",
+				"CONTACTD_FORCE_SEED",
+				"CONTACTD_USERS",
+				"CONTACTD_USER_*",
+				"CONTACTD_DEFAULT_BOOK_SLUG",
+				"CONTACTD_DEFAULT_BOOK_NAME",
+				"CONTACTD_CHANGE_RETENTION_DAYS",
+				"CONTACTD_CHANGE_RETENTION_MAX_REVISIONS",
+				"CONTACTD_PRUNE_INTERVAL",
+				"CONTACTD_ENABLE_ADDRESSBOOK_COLOR",
+			} {
+				if !strings.Contains(out, wantEnv) {
+					t.Fatalf("stdout missing environment var %q: %q", wantEnv, out)
+				}
+			}
 			if got := stderr.String(); got != "" {
 				t.Fatalf("stderr = %q, want empty", got)
 			}
@@ -359,6 +388,9 @@ func TestRunMain_ServeHelpFlagPrintsHelp(t *testing.T) {
 			}
 			if !strings.Contains(out, "--listen-addr") || !strings.Contains(out, "--port") || !strings.Contains(out, "--db-path") {
 				t.Fatalf("stdout missing expected serve flags: %q", out)
+			}
+			if strings.Contains(out, "--listen addr") || strings.Contains(out, "--db path") {
+				t.Fatalf("stdout should not advertise daemon aliases: %q", out)
 			}
 			if stderr.Len() != 0 {
 				t.Fatalf("stderr = %q, want empty", stderr.String())
