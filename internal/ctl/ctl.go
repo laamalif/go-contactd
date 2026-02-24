@@ -152,19 +152,21 @@ func printUserPasswdHelp(w io.Writer) {
 }
 
 func printExportHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: contactctl export --username <name> [--book <slug>] [--format dir|concat] [--out <path>] [--db-path <path>|--db <path>|-d <path>]")
+	_, _ = fmt.Fprintln(w, "usage: contactctl export --username <name> [--book <slug>] [--format dir|concat] [--out <path>] [--dry-run] [--db-path <path>|--db <path>|-d <path>]")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "formats:")
 	_, _ = fmt.Fprintln(w, "  dir     write one <href>.vcf file per card into --out directory (default)")
 	_, _ = fmt.Fprintln(w, "  concat  write concatenated stored vCards to stdout (or --out file if set)")
+	_, _ = fmt.Fprintln(w, "  --dry-run  validate and summarize without writing files or payloads")
 }
 
 func printImportHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: contactctl import --username <name> [--book <slug>] [--db-path <path>|--db <path>|-d <path>] <file-or-dir>")
+	_, _ = fmt.Fprintln(w, "usage: contactctl import --username <name> [--book <slug>] [--dry-run] [--db-path <path>|--db <path>|-d <path>] <file-or-dir>")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "behavior:")
 	_, _ = fmt.Fprintln(w, "  directory input: imports *.vcf files, href is the filename")
 	_, _ = fmt.Fprintln(w, "  file input: imports concatenated vCards, href is <UID>.vcf")
+	_, _ = fmt.Fprintln(w, "  --dry-run: parse/validate and summarize without writing to the database")
 }
 
 func runUserAdd(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -452,6 +454,7 @@ func runExport(args []string, env map[string]string, stdout, stderr io.Writer) i
 	book := "contacts"
 	format := "dir"
 	outPath := ""
+	dryRun := false
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
 	fs.StringVar(&dbPath, "db", dbPath, "alias for --db-path")
 	fs.StringVar(&dbPath, "d", dbPath, "alias for --db-path")
@@ -459,6 +462,7 @@ func runExport(args []string, env map[string]string, stdout, stderr io.Writer) i
 	fs.StringVar(&book, "book", book, "addressbook slug")
 	fs.StringVar(&format, "format", format, "dir|concat")
 	fs.StringVar(&outPath, "out", outPath, "output directory (dir) or file path (concat)")
+	fs.BoolVar(&dryRun, "dry-run", false, "validate and summarize without writing output")
 	if err := fs.Parse(args); err != nil {
 		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
 		return 2
@@ -500,6 +504,26 @@ func runExport(args []string, env map[string]string, stdout, stderr io.Writer) i
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "db error: %v\n", err)
 		return 1
+	}
+	totalBytes := 0
+	for _, c := range cards {
+		totalBytes += len(c.VCard)
+	}
+	if dryRun {
+		switch format {
+		case "concat":
+			_, _ = fmt.Fprintf(stdout, "dry-run: user=%s book=%s cards=%d total_bytes=%d format=concat out=%s\n", username, book, len(cards), totalBytes, outPath)
+			return 0
+		default:
+			for _, c := range cards {
+				if _, err := safeExportCardFilename(c.Href); err != nil {
+					_, _ = fmt.Fprintf(stderr, "io error: %v\n", err)
+					return 1
+				}
+			}
+			_, _ = fmt.Fprintf(stdout, "dry-run: user=%s book=%s cards=%d total_bytes=%d format=dir out=%s\n", username, book, len(cards), totalBytes, outPath)
+			return 0
+		}
 	}
 
 	switch format {
@@ -583,11 +607,13 @@ func runImport(args []string, env map[string]string, stdout, stderr io.Writer) i
 	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], config.DefaultDBPath)
 	username := ""
 	book := "contacts"
+	dryRun := false
 	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
 	fs.StringVar(&dbPath, "db", dbPath, "alias for --db-path")
 	fs.StringVar(&dbPath, "d", dbPath, "alias for --db-path")
 	fs.StringVar(&username, "username", "", "username")
 	fs.StringVar(&book, "book", book, "addressbook slug")
+	fs.BoolVar(&dryRun, "dry-run", false, "validate and summarize without writing to database")
 	if err := fs.Parse(args); err != nil {
 		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
 		return 2
@@ -626,19 +652,23 @@ func runImport(args []string, env map[string]string, stdout, stderr io.Writer) i
 	}
 	var created, updated int
 	if st.IsDir() {
-		created, updated, err = importFromDir(context.Background(), store, ab.ID, srcPath)
+		created, updated, err = importFromDir(context.Background(), store, ab.ID, srcPath, dryRun)
 	} else {
-		created, updated, err = importFromConcatFile(context.Background(), store, ab.ID, srcPath)
+		created, updated, err = importFromConcatFile(context.Background(), store, ab.ID, srcPath, dryRun)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "import error: %v\n", err)
 		return 1
 	}
+	if dryRun {
+		_, _ = fmt.Fprintf(stdout, "dry-run: user=%s book=%s created=%d updated=%d path=%s\n", username, book, created, updated, srcPath)
+		return 0
+	}
 	_, _ = fmt.Fprintf(stdout, "imported: user=%s book=%s created=%d updated=%d path=%s\n", username, book, created, updated, srcPath)
 	return 0
 }
 
-func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, dir string) (int, int, error) {
+func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, dir string, dryRun bool) (int, int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return 0, 0, fmt.Errorf("read import dir: %w", err)
@@ -674,12 +704,7 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 		if uid == "" {
 			return 0, 0, fmt.Errorf("import file %s: missing UID", name)
 		}
-		res, err := store.PutCard(ctx, db.PutCardInput{
-			AddressbookID: addressbookID,
-			Href:          href,
-			UID:           uid,
-			VCard:         raw,
-		})
+		res, err := putOrClassifyImportedCard(ctx, store, addressbookID, href, uid, raw, dryRun)
 		if err != nil {
 			return 0, 0, fmt.Errorf("put card %s: %w", name, err)
 		}
@@ -692,7 +717,7 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 	return created, updated, nil
 }
 
-func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID int64, path string) (int, int, error) {
+func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID int64, path string, dryRun bool) (int, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, 0, fmt.Errorf("open import file: %w", err)
@@ -712,16 +737,16 @@ func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID in
 		if uid == "" {
 			return 0, 0, fmt.Errorf("decode import file: missing UID")
 		}
-		var buf bytes.Buffer
-		if err := vcard.NewEncoder(&buf).Encode(card); err != nil {
-			return 0, 0, fmt.Errorf("encode imported card %s: %w", uid, err)
+		href := uid + ".vcf"
+		var raw []byte
+		if !dryRun {
+			var buf bytes.Buffer
+			if err := vcard.NewEncoder(&buf).Encode(card); err != nil {
+				return 0, 0, fmt.Errorf("encode imported card %s: %w", uid, err)
+			}
+			raw = buf.Bytes()
 		}
-		res, err := store.PutCard(ctx, db.PutCardInput{
-			AddressbookID: addressbookID,
-			Href:          uid + ".vcf",
-			UID:           uid,
-			VCard:         buf.Bytes(),
-		})
+		res, err := putOrClassifyImportedCard(ctx, store, addressbookID, href, uid, raw, dryRun)
 		if err != nil {
 			return 0, 0, fmt.Errorf("put card %s: %w", uid, err)
 		}
@@ -732,6 +757,26 @@ func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID in
 		}
 	}
 	return created, updated, nil
+}
+
+func putOrClassifyImportedCard(ctx context.Context, store *db.Store, addressbookID int64, href, uid string, raw []byte, dryRun bool) (db.PutCardResult, error) {
+	if dryRun {
+		_, err := store.GetCard(ctx, addressbookID, href)
+		switch {
+		case err == nil:
+			return db.PutCardResult{Created: false}, nil
+		case errors.Is(err, db.ErrNotFound):
+			return db.PutCardResult{Created: true}, nil
+		default:
+			return db.PutCardResult{}, err
+		}
+	}
+	return store.PutCard(ctx, db.PutCardInput{
+		AddressbookID: addressbookID,
+		Href:          href,
+		UID:           uid,
+		VCard:         raw,
+	})
 }
 
 func decodeSingleCardBytes(raw []byte) (vcard.Card, error) {

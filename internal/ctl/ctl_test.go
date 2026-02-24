@@ -79,6 +79,36 @@ func TestRunCLI_ExportDir_WritesVCardFiles(t *testing.T) {
 	}
 }
 
+func TestRunCLI_ExportDir_DryRun_DoesNotWriteFiles(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedExportTestDB(t)
+	outDir := filepath.Join(t.TempDir(), "out")
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"export",
+		"--username", "alice",
+		"--book", "contacts",
+		"--format", "dir",
+		"--out", outDir,
+		"--dry-run",
+		"-d", dbPath,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 0 {
+		t.Fatalf("code=%d want 0 stderr=%q", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr=%q want empty", stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "dry-run:") || !strings.Contains(got, "cards=2") {
+		t.Fatalf("stdout=%q want dry-run summary", got)
+	}
+	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
+		t.Fatalf("outDir stat err=%v want not exists", err)
+	}
+}
+
 func TestRunCLI_ImportDir_ImportsVCFFiles(t *testing.T) {
 	t.Parallel()
 
@@ -130,6 +160,54 @@ func TestRunCLI_ImportDir_ImportsVCFFiles(t *testing.T) {
 	}
 	if cards[0].Href != "a.vcf" || cards[1].Href != "b.vcf" {
 		t.Fatalf("hrefs=%q,%q want a.vcf,b.vcf", cards[0].Href, cards[1].Href)
+	}
+}
+
+func TestRunCLI_ImportDir_DryRun_DoesNotWriteDB(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedEmptyImportTestDB(t)
+	srcDir := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(srcDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "a.vcf"), []byte("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-a\r\nFN:Alpha\r\nEND:VCARD\r\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile a.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"import",
+		"--username", "alice",
+		"--dry-run",
+		"-d", dbPath,
+		srcDir,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 0 {
+		t.Fatalf("code=%d want 0 stderr=%q", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr=%q want empty", stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "dry-run:") || !strings.Contains(got, "created=1") {
+		t.Fatalf("stdout=%q want dry-run summary", got)
+	}
+
+	store, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("db.Open verify: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), "alice", "contacts")
+	if err != nil {
+		t.Fatalf("GetAddressbookByUsernameSlug: %v", err)
+	}
+	cards, err := store.ListCards(context.Background(), ab.ID)
+	if err != nil {
+		t.Fatalf("ListCards: %v", err)
+	}
+	if len(cards) != 0 {
+		t.Fatalf("cards len=%d want 0 (dry-run)", len(cards))
 	}
 }
 
