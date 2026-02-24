@@ -9,6 +9,13 @@ Minimal CardDAV server for DAVx5 using Go and SQLite (WAL).
 - CardDAV core flows + `sync-collection` + `PROPFIND`/`PROPPATCH` extensions
 - HTTP service behind reverse proxy (TLS terminated upstream)
 
+## Upstream Libraries
+
+- `github.com/emersion/go-vcard` (vCard parsing/encoding)
+- `github.com/emersion/go-webdav` (WebDAV/CardDAV protocol support)
+
+Both projects are by Simon Ser (`emersion`).
+
 ## Quick Start (Docker)
 
 Build and run directly:
