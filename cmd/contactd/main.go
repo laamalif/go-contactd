@@ -61,7 +61,15 @@ func runServe(args []string, env map[string]string, stderr io.Writer) int {
 	}
 	defer func() { _ = rt.close() }()
 
-	rt.logger.Info("server starting", "event", "server starting", "listen", rt.cfg.ListenAddr, "db_path", rt.cfg.DBPath)
+	rt.logger.Info(
+		"server starting",
+		"event", "server starting",
+		"listen", rt.cfg.ListenAddr,
+		"db_path", rt.cfg.DBPath,
+		"log_level", rt.cfg.LogLevel,
+		"log_format", rt.cfg.LogFormat,
+		"trust_proxy_headers", rt.cfg.TrustProxyHeaders,
+	)
 
 	srv := &http.Server{
 		Addr:    rt.cfg.ListenAddr,
@@ -425,7 +433,7 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	logger := slog.New(slog.NewTextHandler(logOut, nil))
+	logger := newServeLogger(cfg.LogFormat, cfg.LogLevel, logOut)
 
 	store, err := db.Open(ctx, cfg.DBPath)
 	if err != nil {
@@ -443,6 +451,7 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 		Backend:                contactcarddav.NewBackend(store),
 		Sync:                   carddavx.NewSyncService(store),
 		EnableAddressbookColor: cfg.EnableAddressbookColor,
+		TrustProxyHeaders:      cfg.TrustProxyHeaders,
 		RequestMaxBytes:        cfg.RequestMaxBytes,
 		VCardMaxBytes:          cfg.VCardMaxBytes,
 		AttachPrincipal:        contactcarddav.WithPrincipal,
@@ -464,6 +473,34 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 		handler: h,
 		logger:  logger,
 	}, nil
+}
+
+func newServeLogger(format, level string, out io.Writer) *slog.Logger {
+	if out == nil {
+		out = io.Discard
+	}
+	opts := &slog.HandlerOptions{Level: parseSlogLevel(level)}
+	switch format {
+	case "json":
+		return slog.New(slog.NewJSONHandler(out, opts))
+	default:
+		return slog.New(slog.NewTextHandler(out, opts))
+	}
+}
+
+func parseSlogLevel(v string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	case "info":
+		fallthrough
+	default:
+		return slog.LevelInfo
+	}
 }
 
 func startupStore(ctx context.Context, store *db.Store, cfg config.ServeConfig, logger *slog.Logger) error {

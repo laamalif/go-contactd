@@ -85,9 +85,9 @@ Logging / proxy:
 
 | Env var | Flag | Default | Notes |
 |---|---|---:|---|
-| `CONTACTD_LOG_LEVEL` | `--log-level` | `info` | Parsed; runtime level filtering is not yet fully wired |
-| `CONTACTD_LOG_FORMAT` | `--log-format` | `text` | Parsed (`text|json`); runtime currently emits text logs |
-| `CONTACTD_TRUST_PROXY_HEADERS` | `--trust-proxy-headers` | `false` | Parsed; only enable behind trusted proxy boundary |
+| `CONTACTD_LOG_LEVEL` | `--log-level` | `info` | Runtime `slog` level (`debug|info|warn|error`) |
+| `CONTACTD_LOG_FORMAT` | `--log-format` | `text` | Runtime `slog` format (`text|json`) |
+| `CONTACTD_TRUST_PROXY_HEADERS` | `--trust-proxy-headers` | `false` | Use `X-Forwarded-*` for access-log remote only behind trusted proxy boundary |
 
 Bootstrap / maintenance:
 

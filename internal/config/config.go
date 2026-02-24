@@ -166,6 +166,11 @@ func validateServeConfig(cfg ServeConfig) error {
 	default:
 		return fmt.Errorf("invalid log format %q", cfg.LogFormat)
 	}
+	switch strings.ToLower(strings.TrimSpace(cfg.LogLevel)) {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("invalid log level %q", cfg.LogLevel)
+	}
 	if cfg.RequestMaxBytes <= 0 {
 		return fmt.Errorf("request max bytes must be > 0")
 	}

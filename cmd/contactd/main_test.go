@@ -191,6 +191,28 @@ func TestServeHTTPGracefully_ListenFailureReturns1(t *testing.T) {
 	}
 }
 
+func TestNewServeLogger_FormatAndLevel(t *testing.T) {
+	t.Parallel()
+
+	var jsonBuf bytes.Buffer
+	jsonLogger := newServeLogger("json", "info", &jsonBuf)
+	jsonLogger.Info("request", "event", "request", "path", "/healthz")
+	if got := jsonBuf.String(); !strings.Contains(got, `"event":"request"`) {
+		t.Fatalf("json logger output missing JSON fields: %q", got)
+	}
+
+	var textBuf bytes.Buffer
+	textLogger := newServeLogger("text", "warn", &textBuf)
+	textLogger.Info("request", "event", "request")
+	if got := strings.TrimSpace(textBuf.String()); got != "" {
+		t.Fatalf("warn-level text logger should suppress info logs, got %q", got)
+	}
+	textLogger.Warn("request", "event", "request")
+	if got := textBuf.String(); !strings.Contains(got, "level=WARN") {
+		t.Fatalf("text logger output missing WARN level: %q", got)
+	}
+}
+
 func TestPrepareServeRuntime_SyncTokenContinuesAcrossRestart(t *testing.T) {
 	t.Parallel()
 

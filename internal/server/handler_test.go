@@ -3,7 +3,9 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -93,6 +95,139 @@ func TestHandler_ProtectedRouteAcceptsValidBasicAuth(t *testing.T) {
 
 	if rr.Code == http.StatusUnauthorized {
 		t.Fatalf("status = %d, want non-401", rr.Code)
+	}
+}
+
+func TestHandler_AccessLog_JSON_OnePerRequestAndRequiredFields(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	h := server.NewHandler(server.HandlerOptions{Logger: logger})
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.RemoteAddr = "10.0.0.5:4242"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	lines := nonEmptyLines(logBuf.String())
+	if got, want := len(lines), 1; got != want {
+		t.Fatalf("access log lines = %d, want %d; logs=%q", got, want, logBuf.String())
+	}
+	entry := parseJSONLogLine(t, lines[0])
+	if got, want := entry["event"], "request"; got != want {
+		t.Fatalf("event = %#v, want %q", got, want)
+	}
+	if got, want := entry["method"], http.MethodGet; got != want {
+		t.Fatalf("method = %#v, want %q", got, want)
+	}
+	if got, want := entry["path"], "/healthz"; got != want {
+		t.Fatalf("path = %#v, want %q", got, want)
+	}
+	if got, want := int(entry["status"].(float64)), http.StatusOK; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	if _, ok := entry["dur_ms"]; !ok {
+		t.Fatalf("dur_ms missing in log entry %#v", entry)
+	}
+	if _, ok := entry["req_bytes"]; !ok {
+		t.Fatalf("req_bytes missing in log entry %#v", entry)
+	}
+	if _, ok := entry["resp_bytes"]; !ok {
+		t.Fatalf("resp_bytes missing in log entry %#v", entry)
+	}
+	if got, want := entry["remote"], "10.0.0.5:4242"; got != want {
+		t.Fatalf("remote = %#v, want %q", got, want)
+	}
+	if got, want := entry["user"], ""; got != want {
+		t.Fatalf("user = %#v, want empty", got)
+	}
+}
+
+func TestHandler_AccessLog_NoAuthorizationLeak_And_UnauthenticatedUserEmpty(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	h := server.NewHandler(server.HandlerOptions{
+		Logger: logger,
+		Authenticate: func(context.Context, string, string) (string, bool, error) {
+			return "", false, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/alice/", nil)
+	req.SetBasicAuth("alice", "supersecret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if got, want := rr.Code, http.StatusUnauthorized; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+
+	lines := nonEmptyLines(logBuf.String())
+	if got, want := len(lines), 1; got != want {
+		t.Fatalf("access log lines = %d, want %d; logs=%q", got, want, logBuf.String())
+	}
+	entry := parseJSONLogLine(t, lines[0])
+	if got, want := int(entry["status"].(float64)), http.StatusUnauthorized; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	if got, want := entry["user"], ""; got != want {
+		t.Fatalf("user = %#v, want empty", got)
+	}
+	logs := logBuf.String()
+	if strings.Contains(logs, "Authorization") || strings.Contains(logs, "supersecret") || strings.Contains(logs, "YWxpY2U6c3VwZXJzZWNyZXQ=") {
+		t.Fatalf("access log leaked sensitive auth material: %q", logs)
+	}
+}
+
+func TestHandler_AccessLog_ProxyRemoteBehavior_TrustDisabledAndEnabled(t *testing.T) {
+	t.Parallel()
+
+	makeReq := func() *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req.RemoteAddr = "10.0.0.5:4242"
+		req.Header.Set("X-Forwarded-For", "203.0.113.10, 10.0.0.5")
+		return req
+	}
+
+	var disabledBuf bytes.Buffer
+	hDisabled := server.NewHandler(server.HandlerOptions{
+		Logger: slog.New(slog.NewJSONHandler(&disabledBuf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	})
+	rrDisabled := httptest.NewRecorder()
+	hDisabled.ServeHTTP(rrDisabled, makeReq())
+	entryDisabled := parseJSONLogLine(t, nonEmptyLines(disabledBuf.String())[0])
+	if got, want := entryDisabled["remote"], "10.0.0.5:4242"; got != want {
+		t.Fatalf("trust disabled remote = %#v, want %q", got, want)
+	}
+
+	var enabledBuf bytes.Buffer
+	hEnabled := server.NewHandler(server.HandlerOptions{
+		Logger:            slog.New(slog.NewJSONHandler(&enabledBuf, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		TrustProxyHeaders: true,
+	})
+	rrEnabled := httptest.NewRecorder()
+	hEnabled.ServeHTTP(rrEnabled, makeReq())
+	entryEnabled := parseJSONLogLine(t, nonEmptyLines(enabledBuf.String())[0])
+	if got, want := entryEnabled["remote"], "203.0.113.10"; got != want {
+		t.Fatalf("trust enabled remote = %#v, want %q", got, want)
+	}
+}
+
+func TestHandler_AccessLog_LevelFiltering_WarnSuppressesInfoAccessLogs(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	h := server.NewHandler(server.HandlerOptions{Logger: logger})
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got := strings.TrimSpace(logBuf.String()); got != "" {
+		t.Fatalf("expected no access logs at warn level, got %q", got)
 	}
 }
 
@@ -2489,6 +2624,27 @@ func containsString(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func nonEmptyLines(s string) []string {
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func parseJSONLogLine(t *testing.T, line string) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		t.Fatalf("json.Unmarshal log line: %v; line=%q", err, line)
+	}
+	return m
 }
 
 var (

@@ -87,3 +87,17 @@ func TestLoadServeConfig_EnableAddressbookColorFlag_Priority(t *testing.T) {
 		t.Fatalf("EnableAddressbookColor = %v, want true from env", cfg.EnableAddressbookColor)
 	}
 }
+
+func TestLoadServeConfig_InvalidLogLevelRejected(t *testing.T) {
+	t.Parallel()
+
+	_, err := config.LoadServeConfig(nil, map[string]string{
+		"CONTACTD_LOG_LEVEL": "verbose",
+	})
+	if err == nil {
+		t.Fatal("LoadServeConfig error=nil, want validation error")
+	}
+	if got := err.Error(); !strings.Contains(got, "invalid log level") {
+		t.Fatalf("error = %q, want invalid log level", got)
+	}
+}

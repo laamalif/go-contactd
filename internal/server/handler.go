@@ -9,11 +9,13 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/emersion/go-vcard"
 	webdav "github.com/emersion/go-webdav"
@@ -30,6 +32,7 @@ type HandlerOptions struct {
 	Backend                gocarddav.Backend
 	Sync                   *carddavx.SyncService
 	EnableAddressbookColor bool
+	TrustProxyHeaders      bool
 	RequestMaxBytes        int64
 	VCardMaxBytes          int64
 }
@@ -51,6 +54,35 @@ type handler struct {
 	opts HandlerOptions
 }
 
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status    int
+	respBytes int64
+}
+
+func (w *loggingResponseWriter) WriteHeader(statusCode int) {
+	w.status = statusCode
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *loggingResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.respBytes += int64(n)
+	return n, err
+}
+
+func (w *loggingResponseWriter) statusCode() int {
+	if w.status == 0 {
+		return http.StatusOK
+	}
+	return w.status
+}
+
+type requestUserContextKey struct{}
+
 type addressbookMetadataUpdater interface {
 	UpdateAddressBookMetadata(ctx context.Context, p string, displayname, description, color *string) error
 }
@@ -60,56 +92,63 @@ type addressbookColorReader interface {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	lw := &loggingResponseWriter{ResponseWriter: w}
+	r = h.serveHTTP(lw, r)
+	h.logAccess(r, lw, time.Since(start))
+}
+
+func (h *handler) serveHTTP(w http.ResponseWriter, r *http.Request) *http.Request {
 	switch r.URL.Path {
 	case "/.well-known/carddav":
 		http.Redirect(w, r, "/", http.StatusPermanentRedirect)
-		return
+		return r
 	case "/healthz":
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
-		return
+		return r
 	case "/readyz":
 		h.serveReadyz(w, r)
-		return
+		return r
 	}
 	if err := validateRequestPathPayload(r.URL); err != nil {
 		http.Error(w, "invalid path", http.StatusBadRequest)
-		return
+		return r
 	}
 
 	if h.opts.Authenticate != nil && !isPublicPath(r.URL.Path) {
 		var ok bool
 		r, ok = h.requireBasicAuth(w, r)
 		if !ok {
-			return
+			return r
 		}
 	}
 
 	switch {
 	case r.Method == "PROPFIND" && h.opts.Backend != nil:
 		h.handlePropfind(w, r)
-		return
+		return r
 	case r.Method == "PROPPATCH" && h.opts.Backend != nil:
 		h.handleProppatch(w, r)
-		return
+		return r
 	case r.Method == "REPORT" && h.opts.Backend != nil:
 		h.handleReport(w, r)
-		return
+		return r
 	case r.Method == "MKCOL" && h.opts.Backend != nil:
 		h.handleMkcol(w, r)
-		return
+		return r
 	case h.opts.Backend != nil && isCardPath(r.URL.Path):
 		h.serveCardPath(w, r)
-		return
+		return r
 	case r.Method == http.MethodOptions:
 		w.Header().Set("DAV", "1, 3, addressbook")
 		w.Header().Set("Allow", "OPTIONS, GET, PUT, DELETE, PROPFIND, REPORT, MKCOL, PROPPATCH")
 		w.WriteHeader(http.StatusNoContent)
-		return
+		return r
 	default:
 		http.NotFound(w, r)
-		return
+		return r
 	}
 }
 
@@ -137,10 +176,68 @@ func (h *handler) requireBasicAuth(w http.ResponseWriter, r *http.Request) (*htt
 		writeBasicChallenge(w)
 		return r, false
 	}
-	if h.opts.AttachPrincipal != nil && principal != "" {
-		r = r.WithContext(h.opts.AttachPrincipal(r.Context(), principal))
+	if principal != "" {
+		ctx := r.Context()
+		if h.opts.AttachPrincipal != nil {
+			ctx = h.opts.AttachPrincipal(ctx, principal)
+		}
+		ctx = context.WithValue(ctx, requestUserContextKey{}, principal)
+		r = r.WithContext(ctx)
 	}
 	return r, true
+}
+
+func (h *handler) logAccess(r *http.Request, w *loggingResponseWriter, dur time.Duration) {
+	if r == nil || w == nil {
+		return
+	}
+	reqBytes := r.ContentLength
+	if reqBytes < 0 {
+		reqBytes = 0
+	}
+	user, _ := r.Context().Value(requestUserContextKey{}).(string)
+	h.opts.Logger.Info(
+		"request",
+		"event", "request",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"status", w.statusCode(),
+		"dur_ms", dur.Milliseconds(),
+		"user", user,
+		"req_bytes", reqBytes,
+		"resp_bytes", w.respBytes,
+		"remote", requestRemoteForLog(r, h.opts.TrustProxyHeaders),
+	)
+}
+
+func requestRemoteForLog(r *http.Request, trustProxy bool) string {
+	if r == nil {
+		return ""
+	}
+	if trustProxy {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			for _, part := range parts {
+				if v := strings.TrimSpace(part); v != "" {
+					return v
+				}
+			}
+		}
+		if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
+			return xrip
+		}
+	}
+	if r.RemoteAddr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	if host == "" {
+		return r.RemoteAddr
+	}
+	return r.RemoteAddr
 }
 
 func writeBasicChallenge(w http.ResponseWriter) {
