@@ -1,10 +1,6 @@
 # go-contactd
 
-CardDAV server for DAVx5 using Go and SQLite (WAL).
-
-Installed binary names use daemon-style naming:
-- `contactd` (daemon)
-- `contactctl` (admin utility)
+Minimal CardDAV server for DAVx5 using Go and SQLite (WAL).
 
 ## Status
 
@@ -147,62 +143,12 @@ Seed behavior:
 
 `/readyz` should fail if the DB is unavailable, unreadable, or corrupted.
 
-## Logging and Redaction Policy
-
-- Logs are emitted to `stderr`
-- `contactd` writes daemon/access logs; `contactctl` keeps `stdout` deterministic/script-friendly
-- Never log:
-  - `Authorization` header values
-  - raw vCard payloads
-  - password material / bcrypt seeds
-
-`contactd` text logs use daemon-style formatting by default. `--log-format json` emits structured JSON logs.
-
 ## Reverse Proxy Guidance
 
 - Run `contactd` on internal HTTP only
 - Terminate TLS at nginx/Caddy/Traefik/HAProxy/ingress
 - Set public hostname/path at the proxy layer
 - Only set `CONTACTD_TRUST_PROXY_HEADERS=true` behind a trusted proxy boundary
-
-## DAVx5 Setup (Basic Auth)
-
-1. Create a user:
-
-   ```bash
-   printf '%s\n' 'secret' | contactctl user add -d /path/to/contactd.sqlite --username alice --password-stdin
-   ```
-
-2. Start the server (direct or via Docker/compose).
-3. In DAVx5, add account using:
-   - Base URL: `https://your-host.example/`
-   - Username: `alice`
-   - Password: configured password
-4. DAVx5 discovery will use `/.well-known/carddav` and standard CardDAV discovery properties.
-
-## Backup and Restore (SQLite / WAL)
-
-SQLite runs in WAL mode. For reliable file-level backups:
-
-- Prefer stopping the service first, then copy the DB files together:
-  - `contactd.sqlite`
-  - `contactd.sqlite-wal` (if present)
-  - `contactd.sqlite-shm` (if present)
-
-Example (service stopped):
-
-```bash
-cp /data/contactd.sqlite* /backup/contactd/
-```
-
-Restore:
-
-1. Stop the service.
-2. Restore the DB files to the configured DB path directory.
-3. Ensure permissions are correct (see below).
-4. Start the service and verify `/readyz`.
-
-Note: after restores/migrations that alter internal lineage, old sync tokens may become invalid. Clients should receive `valid-sync-token` errors and perform a fresh sync.
 
 ## File Permissions (DB Path / Volume)
 
@@ -320,22 +266,4 @@ rcctl set contactd command /usr/local/bin/contactd-wrapper
 rcctl set contactd user _contactd
 rcctl enable contactd
 rcctl start contactd
-```
-
-## Signals
-
-- `SIGINT`: graceful shutdown
-- `SIGTERM`: graceful shutdown
-- `SIGHUP`: ignored/no-op for MVP (no hot reload)
-
-## Developer Verification
-
-```bash
-gofmt -w .
-golangci-lint run   # if installed
-go vet ./...
-go test ./...
-bash deploy/smoke-native.sh
-# Docker-enabled hosts:
-# CONTACTD_HOST_PORT=18080 bash deploy/smoke-docker.sh
 ```
