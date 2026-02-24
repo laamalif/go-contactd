@@ -166,7 +166,7 @@ count_in_body() {
 wait_ready() {
   for _ in $(seq 1 50); do
     local code
-    code="$(curl -sS -o /dev/null -w '%{http_code}' "${BASE}/readyz" 2>/dev/null || true)"
+    code="$(curl -sS -o /dev/null -w '%{http_code}' "${BASE}/health" 2>/dev/null || true)"
     [[ "${code}" == "200" ]] && return 0
     sleep 0.1
   done

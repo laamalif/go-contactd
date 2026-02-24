@@ -111,13 +111,8 @@ func (h *handler) serveHTTP(w http.ResponseWriter, r *http.Request) *http.Reques
 	case "/.well-known/carddav":
 		http.Redirect(w, r, h.wellKnownRedirectTarget(), http.StatusPermanentRedirect)
 		return r
-	case "/healthz":
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
-		return r
-	case "/readyz":
-		h.serveReadyz(w, r)
+	case "/health":
+		h.serveHealth(w, r)
 		return r
 	}
 	if err := validateRequestPathPayload(r.URL); err != nil {
@@ -172,7 +167,7 @@ func (h *handler) wellKnownRedirectTarget() string {
 
 func isPublicPath(p string) bool {
 	switch p {
-	case "/healthz", "/readyz", "/.well-known/carddav":
+	case "/health", "/.well-known/carddav":
 		return true
 	default:
 		return false
@@ -263,10 +258,10 @@ func writeBasicChallenge(w http.ResponseWriter) {
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
 }
 
-func (h *handler) serveReadyz(w http.ResponseWriter, r *http.Request) {
+func (h *handler) serveHealth(w http.ResponseWriter, r *http.Request) {
 	if h.opts.ReadyCheck != nil {
 		if err := h.opts.ReadyCheck(r.Context()); err != nil {
-			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			http.Error(w, "unhealthy", http.StatusServiceUnavailable)
 			return
 		}
 	}

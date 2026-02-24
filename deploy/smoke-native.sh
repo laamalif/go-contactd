@@ -54,8 +54,7 @@ start_server() {
   CONTACTD_LISTEN_ADDR="${LISTEN_ADDR}" \
   "${BIN_PATH}" >"${TMP_DIR}/server.stdout" 2>"${SERVER_LOG}" &
   SERVER_PID=$!
-  wait_for_200 "/healthz"
-  wait_for_200 "/readyz"
+  wait_for_200 "/health"
 }
 
 stop_server() {

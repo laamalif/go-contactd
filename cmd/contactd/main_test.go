@@ -201,7 +201,7 @@ func TestNewServeLogger_FormatAndLevel(t *testing.T) {
 
 	var jsonBuf bytes.Buffer
 	jsonLogger := newServeLogger("json", "info", &jsonBuf)
-	jsonLogger.Info("request", "event", "request", "path", "/healthz")
+	jsonLogger.Info("request", "event", "request", "path", "/health")
 	if got := jsonBuf.String(); !strings.Contains(got, `"event":"request"`) {
 		t.Fatalf("json logger output missing JSON fields: %q", got)
 	}

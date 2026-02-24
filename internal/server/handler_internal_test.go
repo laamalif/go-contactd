@@ -41,7 +41,7 @@ func TestWriteInvalidBodyOrTooLarge(t *testing.T) {
 func TestRequestRemoteForLog_DirectSocketReturnsHostOnly(t *testing.T) {
 	t.Parallel()
 
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	req.RemoteAddr = "10.0.0.5:4242"
 
 	if got, want := requestRemoteForLog(req, false), "10.0.0.5"; got != want {

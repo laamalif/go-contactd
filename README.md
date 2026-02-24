@@ -33,8 +33,7 @@ docker run --rm \
 Health checks:
 
 ```bash
-curl http://127.0.0.1:8080/healthz
-curl http://127.0.0.1:8080/readyz
+curl http://127.0.0.1:8080/health
 ```
 
 ## Quick Start (Compose)
@@ -136,12 +135,11 @@ Seed behavior:
 - Applied only when DB is empty, unless `--force-seed` / `CONTACTD_FORCE_SEED=true`
 - DB remains the source of truth at runtime
 
-## Health and Readiness
+## Health
 
-- `GET /healthz`: liveness only (no DB query)
-- `GET /readyz`: readiness includes SQLite roundtrip (`SELECT 1`)
-
-`/readyz` should fail if the DB is unavailable, unreadable, or corrupted.
+- `GET /health`: process + SQLite check (`SELECT 1`)
+- returns `200` when healthy
+- returns `503` when the DB check fails
 
 ## Reverse Proxy Guidance
 

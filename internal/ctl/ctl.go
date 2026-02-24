@@ -830,7 +830,7 @@ func validateUsername(username string) error {
 		return fmt.Errorf("invalid --username: use 1-64 chars [a-z0-9_-], start/end with [a-z0-9]")
 	}
 	switch username {
-	case ".well-known", "healthz", "readyz":
+	case ".well-known", "health", "healthz", "readyz":
 		return fmt.Errorf("invalid --username: %q is reserved", username)
 	}
 	return nil

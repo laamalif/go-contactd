@@ -16,8 +16,7 @@ The container runs `contactd` (daemon mode) and persists SQLite data under `/dat
 
 ## Check health
 
-- Liveness: `curl http://127.0.0.1:${CONTACTD_HOST_PORT:-8080}/healthz`
-- Readiness: `curl http://127.0.0.1:${CONTACTD_HOST_PORT:-8080}/readyz`
+- Health (HTTP + SQLite check): `curl http://127.0.0.1:${CONTACTD_HOST_PORT:-8080}/health`
 
 The image uses a distroless runtime, so no shell-based in-container healthcheck command is configured.
 

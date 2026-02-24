@@ -100,9 +100,8 @@ ensure_env_file
 log "starting compose stack"
 docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d --build
 
-log "waiting for health/readiness"
-wait_for_200 "/healthz"
-wait_for_200 "/readyz"
+log "waiting for health"
+wait_for_200 "/health"
 
 log "principal discovery"
 http_capture PROPFIND "${BASE_URL}/alice/" \
@@ -142,8 +141,7 @@ log "captured token: ${token1}"
 
 log "restarting container"
 docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" restart contactd
-wait_for_200 "/healthz"
-wait_for_200 "/readyz"
+wait_for_200 "/health"
 
 log "PUT card b after restart"
 http_capture PUT "${BASE_URL}/alice/contacts/b.vcf" \
