@@ -27,6 +27,12 @@ Run a native-binary smoke flow (health, discovery, write/read, sync, restart, sy
 
 `bash deploy/smoke-native.sh`
 
+## Docker Smoke / E2E Script
+
+Run the same flow against the compose deployment (requires Docker daemon access):
+
+`CONTACTD_HOST_PORT=18080 bash deploy/smoke-docker.sh`
+
 ## Reverse proxy notes
 
 - The service speaks HTTP internally.

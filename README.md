@@ -298,4 +298,6 @@ golangci-lint run   # if installed
 go vet ./...
 go test ./...
 bash deploy/smoke-native.sh
+# Docker-enabled hosts:
+# CONTACTD_HOST_PORT=18080 bash deploy/smoke-docker.sh
 ```
