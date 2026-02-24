@@ -121,7 +121,14 @@ func (s *SyncService) SyncCollection(ctx context.Context, username, slug, rawTok
 	if err != nil {
 		return SyncResult{}, err
 	}
-	out := SyncResult{SyncToken: currentToken}
+	tokenRevision := ab.Revision
+	if len(changes) > 0 {
+		lastRevision := changes[len(changes)-1].Revision
+		if lastRevision < tokenRevision {
+			tokenRevision = lastRevision
+		}
+	}
+	out := SyncResult{SyncToken: FormatSyncToken(ab.ID, tokenRevision)}
 	for _, ch := range changes {
 		fullHref := "/" + username + "/" + slug + "/" + ch.Href
 		if ch.Deleted {

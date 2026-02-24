@@ -86,6 +86,81 @@ func TestService_SyncCollection_EmptyTokenInitialSyncAndInvalidToken(t *testing.
 	}
 }
 
+func TestService_SyncCollection_DeltaLimitReturnsContinuationToken(t *testing.T) {
+	t.Parallel()
+
+	store := openSyncStore(t)
+	defer store.Close()
+	userID, err := store.CreateUser(context.Background(), "alice", "hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := store.CreateAddressbook(context.Background(), userID, "contacts", "Contacts"); err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+	backend := contactcarddav.NewBackend(store)
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", sampleCard("uid-a", "Alice A"), &carddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject a: %v", err)
+	}
+
+	svc := carddavx.NewSyncService(store)
+	baseline, err := svc.SyncCollection(context.Background(), "alice", "contacts", "", 0)
+	if err != nil {
+		t.Fatalf("SyncCollection baseline: %v", err)
+	}
+	baseTok, err := carddavx.ParseSyncToken(baseline.SyncToken)
+	if err != nil {
+		t.Fatalf("ParseSyncToken baseline: %v", err)
+	}
+
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/b.vcf", sampleCard("uid-b", "Bob B"), &carddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject b: %v", err)
+	}
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/c.vcf", sampleCard("uid-c", "Carol C"), &carddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject c: %v", err)
+	}
+	if err := backend.DeleteAddressObject(ctx, "/alice/contacts/b.vcf"); err != nil {
+		t.Fatalf("DeleteAddressObject b: %v", err)
+	}
+
+	firstPage, err := svc.SyncCollection(context.Background(), "alice", "contacts", baseline.SyncToken, 2)
+	if err != nil {
+		t.Fatalf("SyncCollection page1: %v", err)
+	}
+	if len(firstPage.Updated)+len(firstPage.Deleted) != 2 {
+		t.Fatalf("page1 item count = %d, want 2 (updated=%d deleted=%d)", len(firstPage.Updated)+len(firstPage.Deleted), len(firstPage.Updated), len(firstPage.Deleted))
+	}
+	firstTok, err := carddavx.ParseSyncToken(firstPage.SyncToken)
+	if err != nil {
+		t.Fatalf("ParseSyncToken page1: %v", err)
+	}
+	if firstTok.Revision != baseTok.Revision+2 {
+		t.Fatalf("page1 token revision = %d, want %d", firstTok.Revision, baseTok.Revision+2)
+	}
+
+	secondPage, err := svc.SyncCollection(context.Background(), "alice", "contacts", firstPage.SyncToken, 2)
+	if err != nil {
+		t.Fatalf("SyncCollection page2: %v", err)
+	}
+	if len(secondPage.Updated)+len(secondPage.Deleted) != 1 {
+		t.Fatalf("page2 item count = %d, want 1 (updated=%d deleted=%d)", len(secondPage.Updated)+len(secondPage.Deleted), len(secondPage.Updated), len(secondPage.Deleted))
+	}
+	if len(secondPage.Deleted) != 1 || secondPage.Deleted[0] != "/alice/contacts/b.vcf" {
+		t.Fatalf("page2 deleted = %+v, want [/alice/contacts/b.vcf]", secondPage.Deleted)
+	}
+	secondTok, err := carddavx.ParseSyncToken(secondPage.SyncToken)
+	if err != nil {
+		t.Fatalf("ParseSyncToken page2: %v", err)
+	}
+	if secondTok.Revision != baseTok.Revision+3 {
+		t.Fatalf("page2 token revision = %d, want %d", secondTok.Revision, baseTok.Revision+3)
+	}
+	if secondTok.Revision <= firstTok.Revision {
+		t.Fatalf("tokens not monotonic: page1=%d page2=%d", firstTok.Revision, secondTok.Revision)
+	}
+}
+
 func openSyncStore(t *testing.T) *db.Store {
 	t.Helper()
 	store, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "contactd.sqlite"))

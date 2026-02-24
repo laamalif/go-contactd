@@ -258,6 +258,9 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 		XMLName   xml.Name
 		Hrefs     []string `xml:"href"`
 		SyncToken string   `xml:"sync-token"`
+		Limit     *struct {
+			NResults int `xml:"nresults"`
+		} `xml:"limit"`
 	}
 	if err := xml.NewDecoder(r.Body).Decode(&envelope); err != nil {
 		http.Error(w, "invalid xml", http.StatusBadRequest)
@@ -272,7 +275,11 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 		h.handleAddressbookQuery(w, r)
 		return
 	case "sync-collection":
-		h.handleSyncCollection(w, r, envelope.SyncToken)
+		limit := 0
+		if envelope.Limit != nil && envelope.Limit.NResults > 0 {
+			limit = envelope.Limit.NResults
+		}
+		h.handleSyncCollection(w, r, envelope.SyncToken, limit)
 		return
 	default:
 		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
@@ -280,7 +287,7 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *handler) handleSyncCollection(w http.ResponseWriter, r *http.Request, rawToken string) {
+func (h *handler) handleSyncCollection(w http.ResponseWriter, r *http.Request, rawToken string, limit int) {
 	if h.opts.Sync == nil {
 		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
 		return
@@ -290,7 +297,7 @@ func (h *handler) handleSyncCollection(w http.ResponseWriter, r *http.Request, r
 		http.NotFound(w, r)
 		return
 	}
-	res, err := h.opts.Sync.SyncCollection(r.Context(), user, slug, strings.TrimSpace(rawToken), 0)
+	res, err := h.opts.Sync.SyncCollection(r.Context(), user, slug, strings.TrimSpace(rawToken), limit)
 	if err != nil {
 		if carddavx.IsInvalidSyncToken(err) {
 			body, mErr := davxml.Marshal(davxml.Error{ValidSyncToken: &struct{}{}})
