@@ -3,7 +3,6 @@ SHELL := bash
 GO ?= go
 BIN_NAME ?= contactd
 ADMIN_BIN_NAME ?= contactctl
-COMPAT_BIN_NAME ?= go-contactd
 BIN_DIR ?= bin
 DIST_DIR ?= dist
 PKG ?= ./cmd/contactd
@@ -18,19 +17,16 @@ build:
 	mkdir -p "$(BIN_DIR)"
 	./build_dist.sh -o "$(BIN_DIR)/$(BIN_NAME)" "$(PKG)"
 	ln -sf "$(BIN_NAME)" "$(BIN_DIR)/$(ADMIN_BIN_NAME)"
-	ln -sf "$(BIN_NAME)" "$(BIN_DIR)/$(COMPAT_BIN_NAME)"
 
 build-static:
 	mkdir -p "$(BIN_DIR)"
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w $(STAMP_LDFLAGS)" -o "$(BIN_DIR)/$(BIN_NAME)" "$(PKG)"
 	ln -sf "$(BIN_NAME)" "$(BIN_DIR)/$(ADMIN_BIN_NAME)"
-	ln -sf "$(BIN_NAME)" "$(BIN_DIR)/$(COMPAT_BIN_NAME)"
 
 build-static-ext:
 	mkdir -p "$(BIN_DIR)"
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w -extldflags '-static' $(STAMP_LDFLAGS)" -o "$(BIN_DIR)/$(BIN_NAME)" "$(PKG)"
 	ln -sf "$(BIN_NAME)" "$(BIN_DIR)/$(ADMIN_BIN_NAME)"
-	ln -sf "$(BIN_NAME)" "$(BIN_DIR)/$(COMPAT_BIN_NAME)"
 
 dist:
 	./build_release.sh

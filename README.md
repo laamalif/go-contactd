@@ -5,7 +5,6 @@ Minimal, container-ready CardDAV server for DAVx5 using Go + SQLite (WAL mode).
 Installed binary names use daemon-style naming:
 - `contactd` (daemon)
 - `contactctl` (admin utility)
-- `go-contactd` remains supported as a compatibility alias
 
 ## Status
 
@@ -75,12 +74,6 @@ Admin (`contactctl`) examples:
 - `contactctl user delete (--username | --id) [-d /path/to/db]`
 - `contactctl user passwd (--username | --id) (--password | --password-stdin) [-d /path/to/db]`
 - `contactctl -V` print version and exit
-
-Compatibility alias (still supported, not preferred):
-
-- `go-contactd serve ...`
-- `go-contactd user ...`
-- `go-contactd version ...`
 
 Common exit codes:
 

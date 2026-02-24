@@ -7,7 +7,6 @@ cd "${ROOT_DIR}"
 DIST_DIR="${DIST_DIR:-dist}"
 BIN_NAME="${BIN_NAME:-contactd}"
 ADMIN_BIN_NAME="${ADMIN_BIN_NAME:-contactctl}"
-COMPAT_BIN_NAME="${COMPAT_BIN_NAME:-go-contactd}"
 PKG="${PKG:-./cmd/contactd}"
 WRITE_ALIAS_SYMLINKS="${WRITE_ALIAS_SYMLINKS:-1}"
 
@@ -87,9 +86,7 @@ for target in "${TARGETS[@]}"; do
 
   if [[ "${WRITE_ALIAS_SYMLINKS}" == "1" ]]; then
     admin_alias="${DIST_DIR}/${ADMIN_BIN_NAME}_${safe_version}_${goos}_${goarch}"
-    compat_alias="${DIST_DIR}/${COMPAT_BIN_NAME}_${safe_version}_${goos}_${goarch}"
     ln -sf "$(basename "${out}")" "${admin_alias}"
-    ln -sf "$(basename "${out}")" "${compat_alias}"
   fi
 done
 

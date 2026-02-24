@@ -11,8 +11,7 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-$(go env GOARCH)}" \
 	go build -trimpath -ldflags='-s -w' -o /out/contactd ./cmd/contactd && \
-	ln -sf /contactd /out/contactctl && \
-	ln -sf /contactd /out/go-contactd
+	ln -sf /contactd /out/contactctl
 
 FROM gcr.io/distroless/static:nonroot
 
@@ -22,7 +21,6 @@ ENV PORT=8080 \
 
 COPY --from=build /out/contactd /contactd
 COPY --from=build /out/contactctl /contactctl
-COPY --from=build /out/go-contactd /go-contactd
 
 VOLUME ["/data"]
 EXPOSE 8080
