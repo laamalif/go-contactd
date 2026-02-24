@@ -480,7 +480,7 @@ func TestRunMain_ContactctlHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("contactctl --help code = %d, want 0 stderr=%q", code, stderr.String())
 	}
-	if got := stdout.String(); !strings.Contains(got, "usage: contactctl <user|export|version>") {
+	if got := stdout.String(); !strings.Contains(got, "usage: contactctl <user|export|import|version>") {
 		t.Fatalf("contactctl help stdout = %q, want admin usage", got)
 	}
 }
