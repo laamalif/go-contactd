@@ -53,6 +53,27 @@ type User struct {
 	Username string
 }
 
+type Addressbook struct {
+	ID          int64
+	UserID      int64
+	Username    string
+	Slug        string
+	DisplayName string
+	Description string
+	Color       string
+	Revision    int64
+}
+
+type Card struct {
+	ID            int64
+	AddressbookID int64
+	Href          string
+	UID           string
+	ETagHex       string
+	VCard         []byte
+	ModTime       time.Time
+}
+
 func Open(ctx context.Context, path string) (*Store, error) {
 	dbh, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -282,6 +303,115 @@ func (s *Store) HasAddressbook(ctx context.Context, username, slug string) (bool
 		return false, fmt.Errorf("has addressbook: %w", err)
 	}
 	return n > 0, nil
+}
+
+func (s *Store) ListAddressbooksByUsername(ctx context.Context, username string) ([]Addressbook, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT ab.id, ab.user_id, u.username, ab.slug, ab.displayname, ab.description, ab.color, ab.revision
+		FROM addressbooks ab
+		JOIN users u ON u.id = ab.user_id
+		WHERE u.username = ?
+		ORDER BY ab.id ASC
+	`, username)
+	if err != nil {
+		return nil, fmt.Errorf("list addressbooks by username: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Addressbook
+	for rows.Next() {
+		var ab Addressbook
+		if err := rows.Scan(&ab.ID, &ab.UserID, &ab.Username, &ab.Slug, &ab.DisplayName, &ab.Description, &ab.Color, &ab.Revision); err != nil {
+			return nil, fmt.Errorf("scan addressbook row: %w", err)
+		}
+		out = append(out, ab)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate addressbooks: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) GetAddressbookByUsernameSlug(ctx context.Context, username, slug string) (Addressbook, error) {
+	var ab Addressbook
+	err := s.db.QueryRowContext(ctx, `
+		SELECT ab.id, ab.user_id, u.username, ab.slug, ab.displayname, ab.description, ab.color, ab.revision
+		FROM addressbooks ab
+		JOIN users u ON u.id = ab.user_id
+		WHERE u.username = ? AND ab.slug = ?
+	`, username, slug).Scan(&ab.ID, &ab.UserID, &ab.Username, &ab.Slug, &ab.DisplayName, &ab.Description, &ab.Color, &ab.Revision)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Addressbook{}, ErrNotFound
+		}
+		return Addressbook{}, fmt.Errorf("get addressbook by username/slug: %w", err)
+	}
+	return ab, nil
+}
+
+func (s *Store) DeleteAddressbookByUsernameSlug(ctx context.Context, username, slug string) error {
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM addressbooks
+		WHERE id IN (
+			SELECT ab.id
+			FROM addressbooks ab
+			JOIN users u ON u.id = ab.user_id
+			WHERE u.username = ? AND ab.slug = ?
+		)
+	`, username, slug)
+	if err != nil {
+		return fmt.Errorf("delete addressbook by username/slug: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete addressbook rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) GetCard(ctx context.Context, addressbookID int64, href string) (Card, error) {
+	var c Card
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, addressbook_id, href, uid, etag, vcard_text, mod_time
+		FROM cards
+		WHERE addressbook_id = ? AND href = ?
+	`, addressbookID, href).Scan(&c.ID, &c.AddressbookID, &c.Href, &c.UID, &c.ETagHex, &c.VCard, &c.ModTime)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Card{}, ErrNotFound
+		}
+		return Card{}, fmt.Errorf("get card: %w", err)
+	}
+	return c, nil
+}
+
+func (s *Store) ListCards(ctx context.Context, addressbookID int64) ([]Card, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, addressbook_id, href, uid, etag, vcard_text, mod_time
+		FROM cards
+		WHERE addressbook_id = ?
+		ORDER BY href ASC
+	`, addressbookID)
+	if err != nil {
+		return nil, fmt.Errorf("list cards: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Card
+	for rows.Next() {
+		var c Card
+		if err := rows.Scan(&c.ID, &c.AddressbookID, &c.Href, &c.UID, &c.ETagHex, &c.VCard, &c.ModTime); err != nil {
+			return nil, fmt.Errorf("scan card row: %w", err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate cards: %w", err)
+	}
+	return out, nil
 }
 
 func (s *Store) AddressbookRevision(ctx context.Context, addressbookID int64) (int64, error) {
