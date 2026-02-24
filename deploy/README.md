@@ -33,6 +33,18 @@ Run the same flow against the compose deployment (requires Docker daemon access)
 
 `CONTACTD_HOST_PORT=18080 bash deploy/smoke-docker.sh`
 
+Expected successful tail output:
+
+```text
+[smoke-docker] captured token: urn:contactd:sync:...
+[smoke-docker] restarting container
+[smoke-docker] PUT card b after restart
+[smoke-docker] delta sync with pre-restart token
+[smoke-docker] container smoke + E2E flow passed
+```
+
+If you see `permission denied while trying to connect to the Docker daemon socket`, run on a host/user with Docker daemon access (for example add your user to the `docker` group or use a CI runner with Docker available).
+
 ## Reverse proxy notes
 
 - The service speaks HTTP internally.
