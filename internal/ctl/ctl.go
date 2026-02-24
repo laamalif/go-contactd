@@ -761,11 +761,32 @@ func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID in
 
 func putOrClassifyImportedCard(ctx context.Context, store *db.Store, addressbookID int64, href, uid string, raw []byte, dryRun bool) (db.PutCardResult, error) {
 	if dryRun {
-		_, err := store.GetCard(ctx, addressbookID, href)
+		existing, err := store.GetCard(ctx, addressbookID, href)
 		switch {
 		case err == nil:
+			// Dry-run should report the same UID-conflict failure a real PutCard would hit.
+			if existing.UID != uid {
+				cards, listErr := store.ListCards(ctx, addressbookID)
+				if listErr != nil {
+					return db.PutCardResult{}, listErr
+				}
+				for _, c := range cards {
+					if c.UID == uid && c.Href != href {
+						return db.PutCardResult{}, fmt.Errorf("uid conflict")
+					}
+				}
+			}
 			return db.PutCardResult{Created: false}, nil
 		case errors.Is(err, db.ErrNotFound):
+			cards, listErr := store.ListCards(ctx, addressbookID)
+			if listErr != nil {
+				return db.PutCardResult{}, listErr
+			}
+			for _, c := range cards {
+				if c.UID == uid {
+					return db.PutCardResult{}, fmt.Errorf("uid conflict")
+				}
+			}
 			return db.PutCardResult{Created: true}, nil
 		default:
 			return db.PutCardResult{}, err

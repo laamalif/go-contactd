@@ -396,6 +396,59 @@ func TestRunCLI_ImportDir_UIDConflictReturnsError(t *testing.T) {
 	}
 }
 
+func TestRunCLI_ImportDir_DryRun_UIDConflictReturnsError(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedEmptyImportTestDB(t)
+	store, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("db.Open seed conflict: %v", err)
+	}
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), "alice", "contacts")
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("GetAddressbookByUsernameSlug: %v", err)
+	}
+	if _, err := store.PutCard(context.Background(), db.PutCardInput{
+		AddressbookID: ab.ID,
+		Href:          "existing.vcf",
+		UID:           "uid-conflict",
+		VCard:         []byte("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-conflict\r\nFN:Existing\r\nEND:VCARD\r\n"),
+	}); err != nil {
+		_ = store.Close()
+		t.Fatalf("PutCard existing: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+
+	srcDir := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(srcDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "new.vcf"), []byte("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-conflict\r\nFN:New\r\nEND:VCARD\r\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile new.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"import",
+		"--username", "alice",
+		"--dry-run",
+		"-d", dbPath,
+		srcDir,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 1 {
+		t.Fatalf("dry-run code=%d want 1 stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "import error:") || !strings.Contains(got, "put card new.vcf") {
+		t.Fatalf("stderr=%q want import put-card error", got)
+	}
+}
+
 func seedExportTestDB(t *testing.T) string {
 	t.Helper()
 

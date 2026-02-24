@@ -752,6 +752,10 @@ func (h *handler) handleSyncCollection(w http.ResponseWriter, r *http.Request, r
 		http.NotFound(w, r)
 		return
 	}
+	if principal, _ := r.Context().Value(requestUserContextKey{}).(string); principal != "" && principal != user {
+		http.NotFound(w, r)
+		return
+	}
 	res, err := h.opts.Sync.SyncCollection(r.Context(), user, slug, strings.TrimSpace(rawToken), limit)
 	if err != nil {
 		if carddavx.IsInvalidSyncToken(err) {
