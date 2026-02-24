@@ -100,8 +100,8 @@ Core runtime:
 | `CONTACTD_LISTEN_ADDR` | `--listen-addr` | `:8080` | Overrides `PORT` |
 | `PORT` | n/a | unset | Used only if `CONTACTD_LISTEN_ADDR` is unset |
 | `CONTACTD_BASE_URL` | `--base-url` | inferred/empty | Used for absolute redirects (e.g. `/.well-known/carddav`); DAV `href`s stay root-relative |
-| `CONTACTD_REQUEST_MAX_BYTES` | `--request-max-bytes` | `1048576` | XML/vCard request body limit |
-| `CONTACTD_VCARD_MAX_BYTES` | `--vcard-max-bytes` | `1048576` | Persisted vCard size cap; must be `<=` request max |
+| `CONTACTD_REQUEST_MAX_BYTES` | `--request-max-bytes` | `10485760` | XML/vCard request body limit |
+| `CONTACTD_VCARD_MAX_BYTES` | `--vcard-max-bytes` | `10485760` | Persisted vCard size cap; must be `<=` request max |
 
 Logging / proxy:
 

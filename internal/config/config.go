@@ -16,8 +16,8 @@ const (
 	defaultDBPath          = "/var/db/contactd.db"
 	defaultLogLevel        = "info"
 	defaultLogFormat       = "text"
-	defaultRequestMaxBytes = int64(1 << 20) // 1 MiB
-	defaultVCardMaxBytes   = int64(1 << 20) // 1 MiB
+	defaultRequestMaxBytes = int64(10 << 20) // 10 MiB
+	defaultVCardMaxBytes   = int64(10 << 20) // 10 MiB
 	defaultBookSlug        = "contacts"
 	defaultBookName        = "Contacts"
 	defaultRetentionDays   = 180

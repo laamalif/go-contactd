@@ -76,6 +76,22 @@ func TestLoadServeConfig_VCardMaxBytesMustNotExceedRequestMaxBytes(t *testing.T)
 	}
 }
 
+func TestLoadServeConfig_DefaultByteLimits_Are10MiB(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.LoadServeConfig(nil, map[string]string{})
+	if err != nil {
+		t.Fatalf("LoadServeConfig returned error: %v", err)
+	}
+	const tenMiB = int64(10 << 20)
+	if got, want := cfg.RequestMaxBytes, tenMiB; got != want {
+		t.Fatalf("RequestMaxBytes default = %d, want %d", got, want)
+	}
+	if got, want := cfg.VCardMaxBytes, tenMiB; got != want {
+		t.Fatalf("VCardMaxBytes default = %d, want %d", got, want)
+	}
+}
+
 func TestLoadServeConfig_EnableAddressbookColorFlag_Priority(t *testing.T) {
 	t.Parallel()
 
