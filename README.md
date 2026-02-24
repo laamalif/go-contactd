@@ -78,13 +78,6 @@ Admin (`contactctl`) examples:
 - `contactctl export --dry-run ...` / `contactctl import --dry-run ...` (validate + summarize only)
 - `contactctl -V` print version and exit
 
-Common exit codes:
-
-- `0` success
-- `1` internal/db/runtime error
-- `2` usage/startup validation error
-- `3` not found (user delete/passwd targets)
-
 ## Serve Config (Env / Flags)
 
 Config precedence is: flags > env vars > defaults.
@@ -152,42 +145,13 @@ Seed behavior:
 
 ## File Permissions (DB Path / Volume)
 
-Contacts are sensitive PII. Use restrictive permissions on the DB directory:
+Use a writable DB directory with restrictive permissions (for example `0700`).
 
-- Recommended directory mode: `0700` or `0750`
-- Ensure the runtime UID can read/write the DB path
-
-For the provided distroless container image, the runtime user is non-root (typically UID `65532`).
-
-## Bare-Metal and BSD Builds
-
-Native build:
+## Build
 
 ```bash
-go build -o contactd ./cmd/contactd
-go build -o contactctl ./cmd/contactctl
-```
-
-Cross-compile examples:
-
-```bash
-GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 go build -o contactd-freebsd-amd64 ./cmd/contactd
-GOOS=openbsd GOARCH=amd64 CGO_ENABLED=0 go build -o contactd-openbsd-amd64 ./cmd/contactd
-```
-
-Run directly (daemon mode):
-
-```bash
-CONTACTD_DB_PATH=/var/lib/contactd/contactd.sqlite \
-CONTACTD_LISTEN_ADDR=127.0.0.1:8080 \
-./contactd
-```
-
-Build admin utility binary:
-
-```bash
-go build -o contactctl ./cmd/contactctl
-./contactctl user -h
+make build-static    # local binaries: contactd, contactctl
+make release         # release artifacts (linux/freebsd/openbsd)
 ```
 
 ## Service Examples
