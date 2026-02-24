@@ -260,6 +260,28 @@ func TestStore_DeleteCard_MissingReturnsErrNotFound(t *testing.T) {
 	}
 }
 
+func TestStore_LastCardChange_EmptyAddressbookReturnsErrNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	userID, err := store.CreateUser(ctx, "alice", "bcrypt-hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	bookID, err := store.CreateAddressbook(ctx, userID, "contacts", "Contacts")
+	if err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+
+	_, err = store.LastCardChange(ctx, bookID)
+	if !errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("LastCardChange empty err = %v, want db.ErrNotFound", err)
+	}
+}
+
 func TestStore_PruneCardChangesByAge(t *testing.T) {
 	t.Parallel()
 

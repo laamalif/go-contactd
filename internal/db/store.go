@@ -499,6 +499,9 @@ func (s *Store) LastCardChange(ctx context.Context, addressbookID int64) (CardCh
 		ORDER BY revision DESC, id DESC
 		LIMIT 1
 	`, addressbookID).Scan(&out.Href, &out.ETagHex, &deleted, &out.Revision); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return CardChange{}, ErrNotFound
+		}
 		return CardChange{}, fmt.Errorf("select last card_change: %w", err)
 	}
 	out.Deleted = deleted != 0
