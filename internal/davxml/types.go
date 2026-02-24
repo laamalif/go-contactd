@@ -45,6 +45,11 @@ type Prop struct {
 	ResourceType         *ResourceType `xml:"DAV: resourcetype,omitempty"`
 	GetETag              string        `xml:"DAV: getetag,omitempty"`
 	AddressData          string        `xml:"urn:ietf:params:xml:ns:carddav address-data,omitempty"`
+	Extra                []RawProp     `xml:",any,omitempty"`
+}
+
+type RawProp struct {
+	XMLName xml.Name
 }
 
 type Error struct {
@@ -65,9 +70,13 @@ func StatusLine(code int) string {
 }
 
 func PropStatOK(prop Prop) PropStat {
+	return PropStatStatus(prop, 200)
+}
+
+func PropStatStatus(prop Prop, code int) PropStat {
 	return PropStat{
 		Prop:   prop,
-		Status: StatusLine(200),
+		Status: StatusLine(code),
 	}
 }
 

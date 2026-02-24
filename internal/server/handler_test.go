@@ -360,6 +360,47 @@ func TestHandler_Propfind_DepthInfinityRejected(t *testing.T) {
 	}
 }
 
+func TestHandler_Propfind_CardExplicitProps_UnknownReturns404Propstat(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer store.Close()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject: %v", err)
+	}
+	h := newAuthedHandlerForTests(backend)
+
+	req := httptest.NewRequest("PROPFIND", "/alice/contacts/a.vcf", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:">
+  <D:prop>
+    <D:getetag/>
+    <D:displayname/>
+  </D:prop>
+</D:propfind>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND explicit props status = %d, want %d", got, want)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "getetag") || !strings.Contains(body, "200 OK") {
+		t.Fatalf("PROPFIND explicit props body missing 200/getetag: %q", body)
+	}
+	if !strings.Contains(body, "displayname") || !strings.Contains(body, "404 Not Found") {
+		t.Fatalf("PROPFIND explicit props body missing 404/displayname: %q", body)
+	}
+	// Explicit prop request should not inject extra unrelated properties beyond requested set.
+	if strings.Contains(body, "current-user-principal") || strings.Contains(body, "addressbook-home-set") {
+		t.Fatalf("PROPFIND explicit props body leaked unrelated props: %q", body)
+	}
+}
+
 func TestHandler_Report_UnknownTypeReturns501(t *testing.T) {
 	t.Parallel()
 
