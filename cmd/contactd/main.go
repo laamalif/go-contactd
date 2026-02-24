@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	contactcarddav "github.com/laamalif/go-contactd/internal/carddav"
 	"github.com/laamalif/go-contactd/internal/config"
 	"github.com/laamalif/go-contactd/internal/db"
 	"github.com/laamalif/go-contactd/internal/server"
@@ -389,8 +390,10 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 	}
 
 	h := server.NewHandler(server.HandlerOptions{
-		Logger:     logger,
-		ReadyCheck: store.Ready,
+		Logger:          logger,
+		ReadyCheck:      store.Ready,
+		Backend:         contactcarddav.NewBackend(store),
+		AttachPrincipal: contactcarddav.WithPrincipal,
 		Authenticate: func(ctx context.Context, username, password string) (string, bool, error) {
 			ok, _, err := store.AuthenticateUser(ctx, username, password)
 			if err != nil {
