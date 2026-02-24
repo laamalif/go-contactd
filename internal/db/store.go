@@ -175,6 +175,32 @@ func (s *Store) LastCardChange(ctx context.Context, addressbookID int64) (CardCh
 	return out, nil
 }
 
+func (s *Store) CardChangeRevisions(ctx context.Context, addressbookID int64) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT revision
+		FROM card_changes
+		WHERE addressbook_id = ?
+		ORDER BY revision ASC, id ASC
+	`, addressbookID)
+	if err != nil {
+		return nil, fmt.Errorf("select card_change revisions: %w", err)
+	}
+	defer rows.Close()
+
+	var revs []int64
+	for rows.Next() {
+		var rev int64
+		if err := rows.Scan(&rev); err != nil {
+			return nil, fmt.Errorf("scan card_change revision: %w", err)
+		}
+		revs = append(revs, rev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate card_change revisions: %w", err)
+	}
+	return revs, nil
+}
+
 func (s *Store) PutCard(ctx context.Context, in PutCardInput) (PutCardResult, error) {
 	if in.AddressbookID == 0 {
 		return PutCardResult{}, fmt.Errorf("addressbook_id is required")
@@ -304,6 +330,29 @@ func (s *Store) PruneCardChangesByAge(ctx context.Context, cutoff time.Time) (in
 	return n, nil
 }
 
+func (s *Store) PruneCardChangesByMaxRevisions(ctx context.Context, keep int64) (int64, error) {
+	if keep <= 0 {
+		return 0, nil
+	}
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM card_changes
+		WHERE id IN (
+			SELECT cc.id
+			FROM card_changes cc
+			JOIN addressbooks ab ON ab.id = cc.addressbook_id
+			WHERE cc.revision <= (ab.revision - ?)
+		)
+	`, keep)
+	if err != nil {
+		return 0, fmt.Errorf("prune card_changes by max revisions: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("prune by max revisions rows affected: %w", err)
+	}
+	return n, nil
+}
+
 func (s *Store) ForceCardChangesTimestamp(ctx context.Context, addressbookID int64, ts time.Time) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE card_changes SET changed_at = ? WHERE addressbook_id = ?`, ts.UTC(), addressbookID)
 	if err != nil {
@@ -393,6 +442,9 @@ func (s *Store) withImmediateTx(ctx context.Context, fn func(*sql.Conn) error) (
 	}
 	defer conn.Close()
 
+	if err := s.applyConnPragmas(ctx, conn); err != nil {
+		return err
+	}
 	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return fmt.Errorf("begin immediate: %w", err)
 	}
@@ -411,6 +463,19 @@ func (s *Store) withImmediateTx(ctx context.Context, fn func(*sql.Conn) error) (
 		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true
+	return nil
+}
+
+func (s *Store) applyConnPragmas(ctx context.Context, conn *sql.Conn) error {
+	stmts := []string{
+		`PRAGMA foreign_keys = ON;`,
+		`PRAGMA busy_timeout = 5000;`,
+	}
+	for _, stmt := range stmts {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("apply conn pragma %q: %w", stmt, err)
+		}
+	}
 	return nil
 }
 

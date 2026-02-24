@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -278,6 +281,114 @@ func TestStore_PruneCardChangesByAge(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("CardChangeCount after prune = %d, want 0", count)
+	}
+}
+
+func TestStore_PruneCardChangesByMaxRevisions(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	userID, err := store.CreateUser(ctx, "alice", "bcrypt-hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	bookID, err := store.CreateAddressbook(ctx, userID, "contacts", "Contacts")
+	if err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		href := "x.vcf"
+		uid := "uid-x"
+		if i%2 == 1 {
+			href = "y.vcf"
+			uid = "uid-y"
+		}
+		if _, err := store.PutCard(ctx, db.PutCardInput{
+			AddressbookID: bookID,
+			Href:          href,
+			UID:           uid,
+			VCard:         []byte("BEGIN:VCARD\nVERSION:3.0\nUID:" + uid + "\nFN:X\nEND:VCARD\n"),
+		}); err != nil {
+			t.Fatalf("PutCard #%d: %v", i+1, err)
+		}
+	}
+
+	pruned, err := store.PruneCardChangesByMaxRevisions(ctx, 2)
+	if err != nil {
+		t.Fatalf("PruneCardChangesByMaxRevisions: %v", err)
+	}
+	if pruned != 3 {
+		t.Fatalf("pruned = %d, want 3", pruned)
+	}
+
+	revs, err := store.CardChangeRevisions(ctx, bookID)
+	if err != nil {
+		t.Fatalf("CardChangeRevisions: %v", err)
+	}
+	if len(revs) != 2 {
+		t.Fatalf("len(revs) = %d, want 2", len(revs))
+	}
+	if revs[0] != 4 || revs[1] != 5 {
+		t.Fatalf("revisions = %v, want [4 5]", revs)
+	}
+}
+
+func TestStore_ConcurrentWrites_BeginImmediate_NoLockError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	userID, err := store.CreateUser(ctx, "alice", "bcrypt-hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	bookID, err := store.CreateAddressbook(ctx, userID, "contacts", "Contacts")
+	if err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+
+	const workers = 8
+	errCh := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := store.PutCard(ctx, db.PutCardInput{
+				AddressbookID: bookID,
+				Href:          "c" + strconv.Itoa(i) + ".vcf",
+				UID:           "uid-" + strconv.Itoa(i),
+				VCard:         []byte("BEGIN:VCARD\nVERSION:3.0\nUID:uid-" + strconv.Itoa(i) + "\nFN:C\nEND:VCARD\n"),
+			})
+			errCh <- err
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		if err == nil {
+			continue
+		}
+		if strings.Contains(strings.ToLower(err.Error()), "locked") {
+			t.Fatalf("unexpected lock error: %v", err)
+		}
+		t.Fatalf("PutCard concurrent error: %v", err)
+	}
+
+	count, err := store.CardCount(ctx, bookID)
+	if err != nil {
+		t.Fatalf("CardCount: %v", err)
+	}
+	if count != workers {
+		t.Fatalf("CardCount = %d, want %d", count, workers)
 	}
 }
 
