@@ -1352,6 +1352,147 @@ func TestHandler_Proppatch_AddressbookColor_EnabledPersistsAndPropfindExposes(t 
 	}
 }
 
+func TestHandler_Proppatch_AddressbookColor_Enabled_BodyMatchesGolden(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend:                backend,
+		Sync:                   carddavx.NewSyncService(store),
+		EnableAddressbookColor: true,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:INF="http://inf-it.com/ns/ab/">
+  <D:set>
+    <D:prop>
+      <INF:addressbook-color>#ff0000ff</INF:addressbook-color>
+    </D:prop>
+  </D:set>
+</D:propertyupdate>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPPATCH color golden status = %d, want %d", got, want)
+	}
+	assertGoldenSyncXML(t, rr.Body.String(), "proppatch_addressbook_color_enabled.xml")
+}
+
+func TestHandler_Propfind_AddressbookColor_Enabled_BodyMatchesGolden(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend:                backend,
+		Sync:                   carddavx.NewSyncService(store),
+		EnableAddressbookColor: true,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	patchReq := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:INF="http://inf-it.com/ns/ab/">
+  <D:set>
+    <D:prop>
+      <INF:addressbook-color>#ff0000ff</INF:addressbook-color>
+    </D:prop>
+  </D:set>
+</D:propertyupdate>`))
+	patchReq.SetBasicAuth("alice", "secret")
+	patchReq.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	patchRes := httptest.NewRecorder()
+	h.ServeHTTP(patchRes, patchReq)
+	if got, want := patchRes.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPPATCH color setup status = %d, want %d", got, want)
+	}
+
+	req := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:INF="http://inf-it.com/ns/ab/">
+  <D:prop>
+    <INF:addressbook-color/>
+  </D:prop>
+</D:propfind>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND color golden status = %d, want %d", got, want)
+	}
+	assertGoldenSyncXML(t, rr.Body.String(), "propfind_addressbook_color_enabled_explicit.xml")
+}
+
+func TestHandler_Proppatch_AddressbookColor_Enabled_DuplicateOps_LastWins(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend:                backend,
+		Sync:                   carddavx.NewSyncService(store),
+		EnableAddressbookColor: true,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	req := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:INF="http://inf-it.com/ns/ab/">
+  <D:set><D:prop><INF:addressbook-color>#ff0000ff</INF:addressbook-color></D:prop></D:set>
+  <D:remove><D:prop><INF:addressbook-color/></D:prop></D:remove>
+  <D:set><D:prop><INF:addressbook-color>#00ff00ff</INF:addressbook-color></D:prop></D:set>
+</D:propertyupdate>`))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPPATCH color duplicate ops status = %d, want %d", got, want)
+	}
+
+	propfindReq := httptest.NewRequest("PROPFIND", "/alice/contacts/", bytes.NewBufferString(`<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:" xmlns:INF="http://inf-it.com/ns/ab/">
+  <D:prop><INF:addressbook-color/></D:prop>
+</D:propfind>`))
+	propfindReq.SetBasicAuth("alice", "secret")
+	propfindReq.Header.Set("Depth", "0")
+	propfindReq.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	propfindRes := httptest.NewRecorder()
+	h.ServeHTTP(propfindRes, propfindReq)
+	if got, want := propfindRes.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("PROPFIND after duplicate color ops status = %d, want %d", got, want)
+	}
+	if body := propfindRes.Body.String(); !strings.Contains(body, "#00ff00ff") {
+		t.Fatalf("PROPFIND after duplicate color ops missing last value: %q", body)
+	}
+}
+
 func TestHandler_Proppatch_InvalidXML_Returns400(t *testing.T) {
 	t.Parallel()
 

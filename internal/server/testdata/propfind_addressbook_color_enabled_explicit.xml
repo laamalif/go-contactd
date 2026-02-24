@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<multistatus xmlns="DAV:">
+  <response>
+    <href>/alice/contacts/</href>
+    <propstat>
+      <prop>
+        <addressbook-color xmlns="http://inf-it.com/ns/ab/">#ff0000ff</addressbook-color>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+</multistatus>
