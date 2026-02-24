@@ -267,6 +267,14 @@ func (b *Backend) putAddressObject(ctx context.Context, p string, card vcard.Car
 }
 
 func (b *Backend) DeleteAddressObject(ctx context.Context, p string) error {
+	return b.deleteAddressObject(ctx, p, nil)
+}
+
+func (b *Backend) DeleteAddressObjectWithCurrentETag(ctx context.Context, p string, currentETag string) error {
+	return b.deleteAddressObject(ctx, p, &currentETag)
+}
+
+func (b *Backend) deleteAddressObject(ctx context.Context, p string, currentETag *string) error {
 	user, slug, href, err := parseCardPathForPrincipal(ctx, p)
 	if err != nil {
 		return err
@@ -274,6 +282,12 @@ func (b *Backend) DeleteAddressObject(ctx context.Context, p string) error {
 	ab, err := b.store.GetAddressbookByUsernameSlug(ctx, user, slug)
 	if err != nil {
 		return mapStoreErr(err)
+	}
+	if currentETag != nil {
+		if err := b.store.DeleteCardConditional(ctx, ab.ID, href, *currentETag); err != nil {
+			return mapStoreErr(err)
+		}
+		return nil
 	}
 	if err := b.store.DeleteCard(ctx, ab.ID, href); err != nil {
 		return mapStoreErr(err)

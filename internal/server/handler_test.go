@@ -406,6 +406,99 @@ func (putStatusFakeBackend) PutAddressObjectWithStatus(_ context.Context, p stri
 }
 func (putStatusFakeBackend) DeleteAddressObject(context.Context, string) error { return nil }
 
+type deleteIfMatchRaceBackend struct {
+	mu      sync.Mutex
+	etag    string // quoted
+	deleted bool
+}
+
+func newDeleteIfMatchRaceBackend() *deleteIfMatchRaceBackend {
+	return &deleteIfMatchRaceBackend{etag: `"old-etag"`}
+}
+
+func (b *deleteIfMatchRaceBackend) CurrentUserPrincipal(context.Context) (string, error) {
+	return "/alice/", nil
+}
+func (b *deleteIfMatchRaceBackend) AddressBookHomeSetPath(context.Context) (string, error) {
+	return "/alice/", nil
+}
+func (b *deleteIfMatchRaceBackend) ListAddressBooks(context.Context) ([]gocarddav.AddressBook, error) {
+	return nil, nil
+}
+func (b *deleteIfMatchRaceBackend) GetAddressBook(context.Context, string) (*gocarddav.AddressBook, error) {
+	return nil, webdav.NewHTTPError(http.StatusNotFound, nil)
+}
+func (b *deleteIfMatchRaceBackend) CreateAddressBook(context.Context, *gocarddav.AddressBook) error {
+	return nil
+}
+func (b *deleteIfMatchRaceBackend) DeleteAddressBook(context.Context, string) error { return nil }
+func (b *deleteIfMatchRaceBackend) GetAddressObject(context.Context, string, *gocarddav.AddressDataRequest) (*gocarddav.AddressObject, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.deleted {
+		return nil, webdav.NewHTTPError(http.StatusNotFound, nil)
+	}
+	card := mustSampleCard("uid-race", "Race")
+	return &gocarddav.AddressObject{Path: "/alice/contacts/a.vcf", ETag: b.etag, Card: card}, nil
+}
+func (b *deleteIfMatchRaceBackend) ListAddressObjects(context.Context, string, *gocarddav.AddressDataRequest) ([]gocarddav.AddressObject, error) {
+	return nil, nil
+}
+func (b *deleteIfMatchRaceBackend) QueryAddressObjects(context.Context, string, *gocarddav.AddressBookQuery) ([]gocarddav.AddressObject, error) {
+	return nil, nil
+}
+func (b *deleteIfMatchRaceBackend) PutAddressObject(context.Context, string, vcard.Card, *gocarddav.PutAddressObjectOptions) (*gocarddav.AddressObject, error) {
+	return nil, errors.New("not used")
+}
+func (b *deleteIfMatchRaceBackend) DeleteAddressObject(context.Context, string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	// Simulate a concurrent successful update that lands after the handler's pre-read and before delete.
+	b.etag = `"new-etag"`
+	b.deleted = true
+	return nil
+}
+func (b *deleteIfMatchRaceBackend) DeleteAddressObjectWithCurrentETag(context.Context, string, string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	// Simulate the same concurrent update, but enforce the stale precondition atomically.
+	b.etag = `"new-etag"`
+	return webdav.NewHTTPError(http.StatusPreconditionFailed, errors.New("If-Match condition failed"))
+}
+
+func TestHandler_CardDelete_UsesBackendConditionalDeleteWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	be := newDeleteIfMatchRaceBackend()
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: be,
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return "alice", username == "alice" && password == "secret", nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	delReq := httptest.NewRequest(http.MethodDelete, "/alice/contacts/a.vcf", nil)
+	delReq.SetBasicAuth("alice", "secret")
+	delReq.Header.Set("If-Match", `"old-etag"`)
+	delRes := httptest.NewRecorder()
+	h.ServeHTTP(delRes, delReq)
+	if got, want := delRes.Code, http.StatusPreconditionFailed; got != want {
+		t.Fatalf("DELETE stale If-Match status = %d, want %d body=%q", got, want, delRes.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/alice/contacts/a.vcf", nil)
+	getReq.SetBasicAuth("alice", "secret")
+	getRes := httptest.NewRecorder()
+	h.ServeHTTP(getRes, getReq)
+	if got, want := getRes.Code, http.StatusOK; got != want {
+		t.Fatalf("GET after stale delete status = %d, want %d body=%q", got, want, getRes.Body.String())
+	}
+	if got := getRes.Header().Get("ETag"); got != `"new-etag"` {
+		t.Fatalf("GET ETag after stale delete = %q, want %q", got, `"new-etag"`)
+	}
+}
+
 func TestHandler_CardPut_UsesBackendCreateStatusWhenAvailable(t *testing.T) {
 	t.Parallel()
 

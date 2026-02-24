@@ -99,6 +99,10 @@ type addressObjectPutWithStatus interface {
 	PutAddressObjectWithStatus(ctx context.Context, p string, card vcard.Card, opts *gocarddav.PutAddressObjectOptions) (*gocarddav.AddressObject, bool, error)
 }
 
+type addressObjectDeleteWithCurrentETag interface {
+	DeleteAddressObjectWithCurrentETag(ctx context.Context, p string, currentETag string) error
+}
+
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	lw := &loggingResponseWriter{ResponseWriter: w}
@@ -1333,6 +1337,10 @@ func (h *handler) handleCardPut(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) handleCardDelete(w http.ResponseWriter, r *http.Request) {
+	var (
+		hasMatchedCurrentETag bool
+		matchedCurrentETag    string
+	)
 	if ifMatch := webdav.ConditionalMatch(r.Header.Get("If-Match")); ifMatch.IsSet() {
 		ao, err := h.opts.Backend.GetAddressObject(r.Context(), r.URL.Path, nil)
 		if err != nil {
@@ -1353,8 +1361,20 @@ func (h *handler) handleCardDelete(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, http.StatusText(http.StatusPreconditionFailed), http.StatusPreconditionFailed)
 			return
 		}
+		hasMatchedCurrentETag = true
+		matchedCurrentETag = currentETag
 	}
-	if err := h.opts.Backend.DeleteAddressObject(r.Context(), r.URL.Path); err != nil {
+	var err error
+	if hasMatchedCurrentETag {
+		if be, ok := h.opts.Backend.(addressObjectDeleteWithCurrentETag); ok {
+			err = be.DeleteAddressObjectWithCurrentETag(r.Context(), r.URL.Path, matchedCurrentETag)
+		} else {
+			err = h.opts.Backend.DeleteAddressObject(r.Context(), r.URL.Path)
+		}
+	} else {
+		err = h.opts.Backend.DeleteAddressObject(r.Context(), r.URL.Path)
+	}
+	if err != nil {
 		writeBackendError(w, err)
 		return
 	}

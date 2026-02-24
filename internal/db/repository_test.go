@@ -260,6 +260,53 @@ func TestStore_DeleteCard_MissingReturnsErrNotFound(t *testing.T) {
 	}
 }
 
+func TestStore_DeleteCardConditional_StaleETagReturnsErrPreconditionFailed(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	userID, err := store.CreateUser(ctx, "alice", "bcrypt-hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	bookID, err := store.CreateAddressbook(ctx, userID, "contacts", "Contacts")
+	if err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+	putRes, err := store.PutCard(ctx, db.PutCardInput{
+		AddressbookID: bookID,
+		Href:          "x.vcf",
+		UID:           "uid-x",
+		VCard:         []byte("BEGIN:VCARD\nVERSION:3.0\nUID:uid-x\nFN:X\nEND:VCARD\n"),
+	})
+	if err != nil {
+		t.Fatalf("PutCard: %v", err)
+	}
+	if _, err := store.PutCard(ctx, db.PutCardInput{
+		AddressbookID: bookID,
+		Href:          "x.vcf",
+		UID:           "uid-x",
+		VCard:         []byte("BEGIN:VCARD\nVERSION:3.0\nUID:uid-x\nFN:X2\nEND:VCARD\n"),
+	}); err != nil {
+		t.Fatalf("PutCard update: %v", err)
+	}
+
+	err = store.DeleteCardConditional(ctx, bookID, "x.vcf", putRes.ETagHex)
+	if !errors.Is(err, db.ErrPreconditionFailed) {
+		t.Fatalf("DeleteCardConditional err = %v, want db.ErrPreconditionFailed", err)
+	}
+
+	count, err := store.CardCount(ctx, bookID)
+	if err != nil {
+		t.Fatalf("CardCount: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("CardCount after stale conditional delete = %d, want 1", count)
+	}
+}
+
 func TestStore_LastCardChange_EmptyAddressbookReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 

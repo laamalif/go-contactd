@@ -712,6 +712,14 @@ func (s *Store) putCard(ctx context.Context, in PutCardInput, cond *PutCardCondi
 }
 
 func (s *Store) DeleteCard(ctx context.Context, addressbookID int64, href string) error {
+	return s.deleteCard(ctx, addressbookID, href, nil)
+}
+
+func (s *Store) DeleteCardConditional(ctx context.Context, addressbookID int64, href, expectedCurrentETagHex string) error {
+	return s.deleteCard(ctx, addressbookID, href, &expectedCurrentETagHex)
+}
+
+func (s *Store) deleteCard(ctx context.Context, addressbookID int64, href string, expectedCurrentETagHex *string) error {
 	if addressbookID == 0 || href == "" {
 		return fmt.Errorf("addressbook_id and href are required")
 	}
@@ -726,6 +734,9 @@ func (s *Store) DeleteCard(ctx context.Context, addressbookID int64, href string
 				return ErrNotFound
 			}
 			return fmt.Errorf("select card etag for delete: %w", err)
+		}
+		if expectedCurrentETagHex != nil && lastETag != *expectedCurrentETagHex {
+			return ErrPreconditionFailed
 		}
 
 		if _, err := conn.ExecContext(ctx, `
