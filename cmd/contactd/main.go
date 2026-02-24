@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/laamalif/go-contactd/internal/config"
@@ -21,6 +25,10 @@ func main() {
 }
 
 func run(args []string, stdout, stderr *os.File) int {
+	return runMain(args, currentEnvMap(), stdout, stderr)
+}
+
+func runMain(args []string, env map[string]string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: go-contactd <subcommand>")
 		return 2
@@ -28,7 +36,9 @@ func run(args []string, stdout, stderr *os.File) int {
 
 	switch args[0] {
 	case "serve":
-		return runServe(args[1:], stderr)
+		return runServe(args[1:], env, stderr)
+	case "user":
+		return runUser(args[1:], env, stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, "go-contactd dev")
 		return 0
@@ -39,8 +49,8 @@ func run(args []string, stdout, stderr *os.File) int {
 	}
 }
 
-func runServe(args []string, stderr *os.File) int {
-	rt, err := prepareServeRuntime(context.Background(), args, currentEnvMap(), stderr)
+func runServe(args []string, env map[string]string, stderr io.Writer) int {
+	rt, err := prepareServeRuntime(context.Background(), args, env, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "startup error: %v\n", err)
 		return 2
@@ -59,6 +69,292 @@ func runServe(args []string, stderr *os.File) int {
 		return 1
 	}
 	return 0
+}
+
+func runUser(args []string, env map[string]string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: go-contactd user <add|list|delete|passwd>")
+		return 2
+	}
+
+	switch args[0] {
+	case "add":
+		return runUserAdd(args[1:], env, stdout, stderr)
+	case "list":
+		return runUserList(args[1:], env, stdout, stderr)
+	case "delete":
+		return runUserDelete(args[1:], env, stdout, stderr)
+	case "passwd":
+		return runUserPasswd(args[1:], env, stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown user subcommand: %s\n", args[0])
+		fmt.Fprintln(stderr, "usage: go-contactd user <add|list|delete|passwd>")
+		return 2
+	}
+}
+
+func runUserAdd(args []string, env map[string]string, stdout, stderr io.Writer) int {
+	fs := newCLIFlagSet("user add")
+	var (
+		dbPath   = defaultCLIOpt(env["CONTACTD_DB_PATH"], "/data/contactd.sqlite")
+		username string
+		password string
+		bookSlug = defaultCLIOpt(env["CONTACTD_DEFAULT_BOOK_SLUG"], "contacts")
+		bookName = defaultCLIOpt(env["CONTACTD_DEFAULT_BOOK_NAME"], "Contacts")
+	)
+	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
+	fs.StringVar(&username, "username", "", "username")
+	fs.StringVar(&password, "password", "", "password")
+	fs.StringVar(&bookSlug, "default-book-slug", bookSlug, "default addressbook slug")
+	fs.StringVar(&bookName, "default-book-name", bookName, "default addressbook name")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(stderr, "usage error: %v\n", err)
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
+		return 2
+	}
+	if err := validateUsername(username); err != nil {
+		fmt.Fprintf(stderr, "usage error: %v\n", err)
+		return 2
+	}
+	if password == "" {
+		fmt.Fprintln(stderr, "usage error: --password is required")
+		return 2
+	}
+
+	store, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+	id, err := store.CreateUser(context.Background(), username, string(hash))
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			fmt.Fprintf(stderr, "usage error: username already exists: %s\n", username)
+			return 2
+		}
+		fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+	if _, _, err := store.EnsureAddressbook(context.Background(), id, bookSlug, bookName); err != nil {
+		fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "user added: id=%d username=%s\n", id, username)
+	return 0
+}
+
+func runUserList(args []string, env map[string]string, stdout, stderr io.Writer) int {
+	fs := newCLIFlagSet("user list")
+	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], "/data/contactd.sqlite")
+	format := "table"
+	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
+	fs.StringVar(&format, "format", format, "table|json")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(stderr, "usage error: %v\n", err)
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
+		return 2
+	}
+	if format != "table" && format != "json" {
+		fmt.Fprintf(stderr, "usage error: invalid --format %q\n", format)
+		return 2
+	}
+
+	store, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+	users, err := store.ListUsers(context.Background())
+	if err != nil {
+		fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+
+	if format == "json" {
+		type outUser struct {
+			ID       int64  `json:"id"`
+			Username string `json:"username"`
+		}
+		out := make([]outUser, 0, len(users))
+		for _, u := range users {
+			out = append(out, outUser{ID: u.ID, Username: u.Username})
+		}
+		enc := json.NewEncoder(stdout)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(out); err != nil {
+			fmt.Fprintf(stderr, "internal error: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	fmt.Fprintln(stdout, "ID\tUSERNAME")
+	for _, u := range users {
+		fmt.Fprintf(stdout, "%d\t%s\n", u.ID, u.Username)
+	}
+	return 0
+}
+
+func runUserDelete(args []string, env map[string]string, stdout, stderr io.Writer) int {
+	fs := newCLIFlagSet("user delete")
+	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], "/data/contactd.sqlite")
+	var username string
+	var id int64
+	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
+	fs.StringVar(&username, "username", "", "username")
+	fs.Int64Var(&id, "id", 0, "user id")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(stderr, "usage error: %v\n", err)
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
+		return 2
+	}
+	if (username == "" && id == 0) || (username != "" && id != 0) {
+		fmt.Fprintln(stderr, "usage error: specify exactly one of --username or --id")
+		return 2
+	}
+
+	store, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	if username != "" {
+		err = store.DeleteUserByUsername(context.Background(), username)
+	} else {
+		err = store.DeleteUserByID(context.Background(), id)
+	}
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			fmt.Fprintln(stderr, "not found")
+			return 3
+		}
+		fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+
+	if username != "" {
+		fmt.Fprintf(stdout, "user deleted: username=%s\n", username)
+	} else {
+		fmt.Fprintf(stdout, "user deleted: id=%d\n", id)
+	}
+	return 0
+}
+
+func runUserPasswd(args []string, env map[string]string, stdout, stderr io.Writer) int {
+	fs := newCLIFlagSet("user passwd")
+	dbPath := defaultCLIOpt(env["CONTACTD_DB_PATH"], "/data/contactd.sqlite")
+	var username string
+	var id int64
+	var password string
+	fs.StringVar(&dbPath, "db-path", dbPath, "sqlite db path")
+	fs.StringVar(&username, "username", "", "username")
+	fs.Int64Var(&id, "id", 0, "user id")
+	fs.StringVar(&password, "password", "", "password")
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(stderr, "usage error: %v\n", err)
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage error: unexpected positional arguments")
+		return 2
+	}
+	if (username == "" && id == 0) || (username != "" && id != 0) {
+		fmt.Fprintln(stderr, "usage error: specify exactly one of --username or --id")
+		return 2
+	}
+	if password == "" {
+		fmt.Fprintln(stderr, "usage error: --password is required")
+		return 2
+	}
+
+	store, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+	if username != "" {
+		var userID int64
+		userID, err = store.UserIDByUsername(context.Background(), username)
+		if err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				fmt.Fprintln(stderr, "not found")
+				return 3
+			}
+			fmt.Fprintf(stderr, "db error: %v\n", err)
+			return 1
+		}
+		err = store.SetUserPasswordHash(context.Background(), userID, string(hash))
+	} else {
+		err = store.SetUserPasswordHash(context.Background(), id, string(hash))
+	}
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			fmt.Fprintln(stderr, "not found")
+			return 3
+		}
+		fmt.Fprintf(stderr, "db error: %v\n", err)
+		return 1
+	}
+
+	if username != "" {
+		fmt.Fprintf(stdout, "user password updated: username=%s\n", username)
+	} else {
+		fmt.Fprintf(stdout, "user password updated: id=%d\n", id)
+	}
+	return 0
+}
+
+func newCLIFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs
+}
+
+func defaultCLIOpt(v, fallback string) string {
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(v)
+}
+
+var usernameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$`)
+
+func validateUsername(username string) error {
+	if !usernameRE.MatchString(username) {
+		return fmt.Errorf("username must match %s", usernameRE.String())
+	}
+	switch username {
+	case ".well-known", "healthz", "readyz":
+		return fmt.Errorf("username %q is reserved", username)
+	}
+	return nil
 }
 
 type serveRuntime struct {

@@ -48,6 +48,11 @@ type CardChange struct {
 	Revision int64
 }
 
+type User struct {
+	ID       int64
+	Username string
+}
+
 func Open(ctx context.Context, path string) (*Store, error) {
 	dbh, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -143,9 +148,67 @@ func (s *Store) UserIDByUsername(ctx context.Context, username string) (int64, e
 }
 
 func (s *Store) SetUserPasswordHash(ctx context.Context, userID int64, passwordHash string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, userID)
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, userID)
 	if err != nil {
 		return fmt.Errorf("update user password hash: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update user password rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, username FROM users ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+
+	var out []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username); err != nil {
+			return nil, fmt.Errorf("scan user row: %w", err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate users: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteUserByUsername(ctx context.Context, username string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE username = ?`, username)
+	if err != nil {
+		return fmt.Errorf("delete user by username: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete user by username rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) DeleteUserByID(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete user by id: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete user by id rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
 	}
 	return nil
 }
