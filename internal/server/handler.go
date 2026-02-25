@@ -125,17 +125,16 @@ func (h *handler) serveHTTP(w http.ResponseWriter, r *http.Request) *http.Reques
 		h.serveHealth(w, r)
 		return r
 	}
-	if err := validateRequestPathPayload(r.URL); err != nil {
-		http.Error(w, "invalid path", http.StatusBadRequest)
-		return r
-	}
-
 	if h.opts.Authenticate != nil && !isPublicPath(r.URL.Path) {
 		var ok bool
 		r, ok = h.requireBasicAuth(w, r)
 		if !ok {
 			return r
 		}
+	}
+	if err := validateRequestPathPayload(r.URL); err != nil {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return r
 	}
 
 	switch {

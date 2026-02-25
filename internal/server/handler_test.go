@@ -140,6 +140,28 @@ func TestHandler_ProtectedRouteRejectsUnauthenticated(t *testing.T) {
 	}
 }
 
+func TestHandler_ProtectedRouteInvalidPathUnauthenticatedStillChallenges(t *testing.T) {
+	t.Parallel()
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(context.Context, string, string) (string, bool, error) {
+			t.Fatal("Authenticate should not be called without basic auth header")
+			return "", false, nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/alice%2Fsecret/", nil)
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusUnauthorized; got != want {
+		t.Fatalf("status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	if got := rr.Header().Get("WWW-Authenticate"); got == "" {
+		t.Fatal("WWW-Authenticate header missing")
+	}
+}
+
 func TestHandler_ProtectedRouteAcceptsValidBasicAuth(t *testing.T) {
 	t.Parallel()
 
