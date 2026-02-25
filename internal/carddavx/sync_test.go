@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/emersion/go-vcard"
 	"github.com/emersion/go-webdav/carddav"
@@ -305,6 +306,108 @@ func TestService_SyncCollection_DeltaCollapsesUpdateThenDeleteToDelete(t *testin
 	if got, want := res.Deleted[0], "/alice/contacts/x.vcf"; got != want {
 		t.Fatalf("Deleted[0] = %q, want %q", got, want)
 	}
+}
+
+func TestService_SyncCollection_EmptyTokenFullSyncIncludesLiveCardsAfterMaxRevisionPrune(t *testing.T) {
+	t.Parallel()
+
+	store := openSyncStore(t)
+	defer func() { _ = store.Close() }()
+	userID, err := store.CreateUser(context.Background(), "alice", "hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := store.CreateAddressbook(context.Background(), userID, "contacts", "Contacts"); err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+	backend := contactcarddav.NewBackend(store)
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	for _, cardSpec := range []struct {
+		href string
+		uid  string
+		fn   string
+	}{
+		{href: "/alice/contacts/a.vcf", uid: "uid-a", fn: "Alice A"},
+		{href: "/alice/contacts/b.vcf", uid: "uid-b", fn: "Bob B"},
+		{href: "/alice/contacts/c.vcf", uid: "uid-c", fn: "Carol C"},
+	} {
+		if _, err := backend.PutAddressObject(ctx, cardSpec.href, sampleCard(cardSpec.uid, cardSpec.fn), &carddav.PutAddressObjectOptions{}); err != nil {
+			t.Fatalf("PutAddressObject %s: %v", cardSpec.href, err)
+		}
+	}
+
+	if _, err := store.PruneCardChangesByMaxRevisions(context.Background(), 1); err != nil {
+		t.Fatalf("PruneCardChangesByMaxRevisions: %v", err)
+	}
+
+	svc := carddavx.NewSyncService(store)
+	res, err := svc.SyncCollection(context.Background(), "alice", "contacts", "", 0)
+	if err != nil {
+		t.Fatalf("SyncCollection empty token: %v", err)
+	}
+	if got := len(res.Updated); got != 3 {
+		t.Fatalf("Updated len = %d, want 3 live cards after prune", got)
+	}
+	for _, want := range []string{"/alice/contacts/a.vcf", "/alice/contacts/b.vcf", "/alice/contacts/c.vcf"} {
+		if !containsSyncHref(res.Updated, want) {
+			t.Fatalf("missing href %q in full sync after prune: %+v", want, res.Updated)
+		}
+	}
+}
+
+func TestService_SyncCollection_EmptyTokenFullSyncIncludesLiveCardsAfterAgePrune(t *testing.T) {
+	t.Parallel()
+
+	store := openSyncStore(t)
+	defer func() { _ = store.Close() }()
+	userID, err := store.CreateUser(context.Background(), "alice", "hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := store.CreateAddressbook(context.Background(), userID, "contacts", "Contacts"); err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+	backend := contactcarddav.NewBackend(store)
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	for _, cardSpec := range []struct {
+		href string
+		uid  string
+		fn   string
+	}{
+		{href: "/alice/contacts/x.vcf", uid: "uid-x", fn: "X"},
+		{href: "/alice/contacts/y.vcf", uid: "uid-y", fn: "Y"},
+	} {
+		if _, err := backend.PutAddressObject(ctx, cardSpec.href, sampleCard(cardSpec.uid, cardSpec.fn), &carddav.PutAddressObjectOptions{}); err != nil {
+			t.Fatalf("PutAddressObject %s: %v", cardSpec.href, err)
+		}
+	}
+
+	if _, err := store.PruneCardChangesByAge(context.Background(), time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("PruneCardChangesByAge: %v", err)
+	}
+
+	svc := carddavx.NewSyncService(store)
+	res, err := svc.SyncCollection(context.Background(), "alice", "contacts", "", 0)
+	if err != nil {
+		t.Fatalf("SyncCollection empty token: %v", err)
+	}
+	if got := len(res.Updated); got != 2 {
+		t.Fatalf("Updated len = %d, want 2 live cards after age prune", got)
+	}
+	for _, want := range []string{"/alice/contacts/x.vcf", "/alice/contacts/y.vcf"} {
+		if !containsSyncHref(res.Updated, want) {
+			t.Fatalf("missing href %q in full sync after age prune: %+v", want, res.Updated)
+		}
+	}
+}
+
+func containsSyncHref(refs []carddavx.SyncRef, href string) bool {
+	for _, ref := range refs {
+		if ref.Href == href {
+			return true
+		}
+	}
+	return false
 }
 
 func openSyncStore(t *testing.T) *db.Store {

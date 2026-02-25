@@ -607,9 +607,9 @@ func (s *Store) ListCardChangesSince(ctx context.Context, addressbookID int64, a
 
 func (s *Store) ListCurrentCardSyncStates(ctx context.Context, addressbookID int64, limit int) ([]CardSyncState, error) {
 	query := `
-		SELECT c.href, c.etag, MAX(cc.revision) AS revision
+		SELECT c.href, c.etag, COALESCE(MAX(cc.revision), 0) AS revision
 		FROM cards c
-		JOIN card_changes cc
+		LEFT JOIN card_changes cc
 		  ON cc.addressbook_id = c.addressbook_id
 		 AND cc.href = c.href
 		WHERE c.addressbook_id = ?
