@@ -67,24 +67,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - concat import from non-regular source is rejected (already covered; keep regression)
   - concat import total-input cap is enforced on large regular files (already covered; keep regression)
 
-### FIXME-028 (P3) REPORT `addressbook-multiget` body `href` values are not validated for control bytes before path parsing
-
-- Status: validated by code inspection (user repro/evidence consistent)
-- Impact:
-  - No data leak expected (stored card hrefs cannot contain control bytes through normal PUT path validation).
-  - Malformed body `href` values (for example `%00`) can flow into multiget processing and trigger broken response handling (likely XML marshal failure / `500`) instead of clean per-item `404` or `400`.
-  - Can produce invalid/misleading `href` handling for strict clients.
-- Affected code:
-  - `internal/server/handler.go` (`handleAddressbookMultiGet`, `parseCardPath`)
-- Root cause:
-  - URL path payload validation (`validateRequestPathPayload`) is applied only to `r.URL`, not to `REPORT` body `href` values.
-  - `parseCardPath` percent-decodes via `url.Parse` but does not reject control bytes in decoded segments.
-- Suggested fix:
-  - Apply decoded-segment control-byte validation to multiget `href` body values before `parseCardPath`, or
-  - make `parseCardPath` reject control bytes directly (preferred shared hardening).
-- Tests to add:
-  - multiget `href` with `%00`, `%09`, `%0A`, `%0D`, `%7F` is rejected or yields safe per-item failure without `500`
-
 ### FIXME-029 (P3) `PROPPATCH` metadata fields have no per-field size caps (self-DoS / response-bloat risk)
 
 - Status: validated by code inspection
@@ -162,6 +144,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - Full `sync-collection` bootstrap includes live cards after journal prune (fixed in `213697e`)
 - `sync-collection` continuation pages remain valid across prune (fixed in `fe65dde`)
 - Large full-sync pagination continuation remains cached beyond legacy threshold (fixed in `cdfbb45`)
+- REPORT multiget body `href` control-byte validation via shared `parseCardPath` hardening (fixed in `5786e13`)
 - `REPORT` XML namespace enforcement (fixed in `bfb28e8`)
 - `REPORT addressbook-multiget` target ownership/collection binding (fixed in `509b5db`)
 - `addressbook-multiget` href cap + dedupe (fixed in `bc694e9`)
