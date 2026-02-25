@@ -3513,6 +3513,83 @@ func extractFirstReportETagAndAddressDataRaw(t *testing.T, body string) (string,
 	return html.UnescapeString(mETag[1]), html.UnescapeString(mAddr[1])
 }
 
+func TestHandler_Report_AddressbookMultiget_ResponseTooLargeReturns507(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	card := mustSampleCard("uid-big-multiget", "Big Multiget")
+	card.SetValue(vcard.FieldNote, strings.Repeat("X", 4096))
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/big.vcf", card, &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject big: %v", err)
+	}
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:                backend,
+		AttachPrincipal:        contactcarddav.WithPrincipal,
+		Sync:                   carddavx.NewSyncService(store),
+		ReportMaxResponseBytes: 512,
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:addressbook-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:prop><D:getetag/><C:address-data/></D:prop>
+  <D:href>/alice/contacts/big.vcf</D:href>
+</C:addressbook-multiget>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusInsufficientStorage; got != want {
+		t.Fatalf("REPORT multiget status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+}
+
+func TestHandler_Report_AddressbookQuery_ResponseTooLargeReturns507(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	card := mustSampleCard("uid-big-query", "Big Query")
+	card.SetValue(vcard.FieldNote, strings.Repeat("Y", 4096))
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/big.vcf", card, &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject big: %v", err)
+	}
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:                backend,
+		AttachPrincipal:        contactcarddav.WithPrincipal,
+		Sync:                   carddavx.NewSyncService(store),
+		ReportMaxResponseBytes: 512,
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:prop><D:getetag/><C:address-data/></D:prop>
+</C:addressbook-query>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusInsufficientStorage; got != want {
+		t.Fatalf("REPORT query status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+}
+
 func TestHandler_Report_SyncCollection_WrongNamespaceLimitIgnored(t *testing.T) {
 	t.Parallel()
 

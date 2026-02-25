@@ -37,11 +37,13 @@ type HandlerOptions struct {
 	BaseURL                string
 	RequestMaxBytes        int64
 	VCardMaxBytes          int64
+	ReportMaxResponseBytes int64
 }
 
 const syncServerPageLimit = 500
 const maxAuthorizationHeaderBytes = 8192
 const maxReportMultigetHrefs = 1000
+const defaultReportMaxResponseBytes = 16 << 20 // 16 MiB
 
 func NewHandler(opts HandlerOptions) http.Handler {
 	if opts.Logger == nil {
@@ -52,6 +54,9 @@ func NewHandler(opts HandlerOptions) http.Handler {
 	}
 	if opts.VCardMaxBytes <= 0 || opts.VCardMaxBytes > opts.RequestMaxBytes {
 		opts.VCardMaxBytes = opts.RequestMaxBytes
+	}
+	if opts.ReportMaxResponseBytes <= 0 {
+		opts.ReportMaxResponseBytes = defaultReportMaxResponseBytes
 	}
 	return &handler{opts: opts}
 }
@@ -1071,7 +1076,7 @@ func (h *handler) handleAddressbookMultiGet(w http.ResponseWriter, r *http.Reque
 		responses = append(responses, resp)
 	}
 
-	writeDAVMultiStatus(w, responses)
+	h.writeReportMultiStatus(w, responses)
 }
 
 func (h *handler) handleAddressbookQuery(w http.ResponseWriter, r *http.Request) {
@@ -1098,7 +1103,7 @@ func (h *handler) handleAddressbookQuery(w http.ResponseWriter, r *http.Request)
 		}
 		responses = append(responses, resp)
 	}
-	writeDAVMultiStatus(w, responses)
+	h.writeReportMultiStatus(w, responses)
 }
 
 func parsePropfindDepth(w http.ResponseWriter, r *http.Request) (int, bool) {
@@ -1767,6 +1772,57 @@ func writeDAVMultiStatus(w http.ResponseWriter, responses []davxml.Response) {
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	w.WriteHeader(http.StatusMultiStatus)
 	_, _ = w.Write(body)
+}
+
+func (h *handler) writeReportMultiStatus(w http.ResponseWriter, responses []davxml.Response) {
+	if max := h.opts.ReportMaxResponseBytes; max > 0 {
+		if estimateDAVMultiStatusBytes(responses) > max {
+			http.Error(w, http.StatusText(http.StatusInsufficientStorage), http.StatusInsufficientStorage)
+			return
+		}
+	}
+	writeDAVMultiStatus(w, responses)
+}
+
+func estimateDAVMultiStatusBytes(responses []davxml.Response) int64 {
+	// Conservative upper-bound-ish estimate to avoid building large marshaled XML blobs in memory.
+	var n int64 = 256 // XML prolog + multistatus wrapper
+	for _, resp := range responses {
+		n += 256 // response wrapper / propstat overhead
+		n += int64(len(resp.Href) + len(resp.Status))
+		for _, ps := range resp.PropStats {
+			n += 256 // propstat/status wrapper overhead
+			n += int64(len(ps.Status))
+			switch prop := ps.Prop.(type) {
+			case davxml.Prop:
+				n += estimateDAVPropBytes(prop)
+			case *davxml.Prop:
+				if prop != nil {
+					n += estimateDAVPropBytes(*prop)
+				}
+			default:
+				n += int64(len(fmt.Sprintf("%v", ps.Prop)))
+			}
+		}
+	}
+	return n
+}
+
+func estimateDAVPropBytes(p davxml.Prop) int64 {
+	n := int64(0)
+	n += int64(len(p.GetETag))
+	n += int64(len(p.AddressData))
+	n += int64(len(p.SyncToken))
+	n += int64(len(p.GetContentType))
+	n += int64(len(p.GetLastModified))
+	n += int64(len(p.DisplayName))
+	n += int64(len(p.AddressbookDesc))
+	n += int64(len(p.AddressbookColor))
+	n += int64(len(p.Extra) * 64)
+	for _, extra := range p.Extra {
+		n += int64(len(extra.XMLName.Space) + len(extra.XMLName.Local))
+	}
+	return n
 }
 
 func reportCardResponse(ao gocarddav.AddressObject, raw []byte) (davxml.Response, error) {
