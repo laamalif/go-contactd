@@ -5,59 +5,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 
 ## Open Issues
 
-### FIXME-002 (P1) `REPORT addressbook-multiget` is not bound to request-target ownership/collection
-
-- Status: validated (code inspection; TODO contains multiple duplicate repro variants)
-- Impact:
-  - A `REPORT` to `/alice/contacts/` can request hrefs from another collection under the same principal (including traversal-normalized hrefs) and receive data from that other collection.
-  - A `REPORT` sent to a cross-tenant or nonexistent target collection path (for example `/bob/contacts/` or `/doesnotexist/x/`) can still return caller-owned card data if the body `href`s point at caller-owned resources.
-  - This also combines with traversal-style body hrefs (for example `/alice/contacts/../private/p.vcf`) to bypass collection boundaries while returning normalized leaked hrefs.
-  - When combined with `FIXME-003` (namespace confusion), malformed-namespace multiget payloads can still exfiltrate same-principal cross-collection data and bypass target-path intent.
-  - Method-level authorization behavior is inconsistent on the same target path (e.g. `addressbook-query` correctly returns `404`, while `addressbook-multiget` can return `207` + caller-owned data).
-- Affected code:
-  - `internal/server/handler.go` (`handleAddressbookMultiGet`)
-  - `internal/carddav/backend.go` (`parseCardPathForPrincipal` normalizes path and validates only principal ownership)
-- Root cause:
-  - `handleReport` dispatches `addressbook-multiget` based on path shape (`classifyDAVPath`) and report local-name.
-  - `handleAddressbookMultiGet` trusts each requested `href` and fetches it directly via backend, without enforcing:
-    - request-target collection ownership/principal binding (`r.URL.Path`)
-    - fetched-card membership in the same request-target addressbook
-- Suggested fix:
-  - Parse and validate the request-target collection (`user`, `slug`) once.
-  - Enforce authenticated principal ownership of the REPORT target collection before processing body `href`s (return `404` on mismatch, consistent with `addressbook-query` / `sync-collection`).
-  - For each `href`, require exact membership in the same collection (same user + same slug).
-  - Treat mismatches as `404` per-item response (not global error).
-- Tests to add:
-  - Cross-tenant REPORT target (`/bob/...`) as `alice` returns `404` (no body processing leak).
-  - Nonexistent REPORT target returns `404` (no body processing leak).
-  - Cross-collection href returns `404` prop response in multiget.
-  - Traversal-style href (`../private/...`) returns `404` and does not leak normalized target.
-  - Malformed-namespace multiget (`X:addressbook-multiget`) does not bypass the above checks (after `FIXME-003`).
-  - Relative hrefs in multiget request body are either rejected or normalized and still collection-bound (no bypass).
-
-### FIXME-003 (P2) `REPORT` namespace confusion (local-name-only dispatch and field parsing)
-
-- Status: validated (code inspection)
-- Impact: Non-DAV/CardDAV XML roots and children can drive report behavior (`sync-collection`, `addressbook-multiget`, `limit`, `sync-token`) because dispatch/parsing relies on local names.
-- Affected code:
-  - `internal/server/handler.go` (`handleReport`)
-  - `xml` envelope uses local-name tags (`xml:"href"`, `xml:"sync-token"`, `xml:"limit"`, `xml:"nresults"`)
-  - dispatch uses `envelope.XMLName.Local`
-- Suggested fix:
-  - Enforce root namespace for supported REPORTs:
-    - `DAV:` for `sync-collection`
-    - CardDAV namespace for `addressbook-multiget` / `addressbook-query`
-  - Parse child elements with namespace-aware structs or custom decoder logic.
-  - Reject namespace-mismatched payloads with `400`.
-- Tests to add:
-  - Non-DAV `X:sync-collection` rejected.
-  - Non-DAV `X:limit` / `X:sync-token` do not affect sync behavior.
-  - Non-CardDAV `X:addressbook-multiget` rejected.
-- Revalidated evidence (from TODO):
-  - `X:addressbook-multiget` + `Y:href` payloads are accepted (`207`) and can drive multiget behavior.
-  - Combined with `FIXME-002`, malformed-namespace payloads can return private same-principal cards from unrelated or invalid REPORT targets.
-  - Namespace-less `<addressbook-multiget><href>...` payloads also drive the same behavior.
-
 ### FIXME-004 (P2) `PROPPATCH` namespace confusion and malformed mixed-namespace structure acceptance
 
 - Status: validated (code inspection)
@@ -103,29 +50,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - Reject decoded path segments containing control bytes (`< 0x20` or `0x7f`).
 - Tests to add:
   - `%00`, `%09`, `%0A`, `%0D`, `%7F` path segment payloads rejected with `400`.
-
-### FIXME-007 (P1) `addressbook-multiget` has no href count cap or dedupe (response amplification / DoS risk)
-
-- Status: validated (code inspection)
-- Impact: Large multiget requests with duplicate hrefs can cause large duplicate responses and expensive repeated backend lookups.
-  - Strong authenticated amplification is possible (small request -> large response) and can drive CPU/DB/serialization load.
-  - Handler builds the full multistatus response in memory before writing, increasing memory pressure risk under large href fan-out.
-  - Under concurrent fan-out bursts, the daemon can be terminated (observed exit `137`, likely OOM kill), causing service outage.
-- Affected code:
-  - `internal/server/handler.go` (`handleAddressbookMultiGet`)
-- Root cause:
-  - Loops directly over request `hrefs` with no dedupe and no maximum count.
-- Suggested fix:
-  - Add a configurable or hardcoded cap on href count.
-  - Dedupe hrefs before backend fetch (preserve requested order only if required).
-- Tests to add:
-  - Duplicate hrefs are deduped (or capped) with predictable result behavior.
-  - Large href count rejected or truncated per defined policy.
-- Revalidated evidence (from TODO):
-  - Example amplification: `req_bytes=1915` -> `resp_bytes≈10.5MB` with duplicated hrefs and a large card.
-  - Example large fan-out: `120,000` hrefs produced `207` with `resp_bytes≈53.5MB` and long processing time.
-  - Concurrent fan-out test (3 requests x 12,000 duplicate hrefs on ~131 KiB card) caused daemon process death (`exit_status=137`) and `curl` empty replies.
-  - Repeated campaign result: only 2 concurrent requests with 12,000 duplicate hrefs on a ~131 KiB card reproduced daemon death (`alive=0`, `exit=137`) and `curl` empty replies.
 
 ### FIXME-008 (P1) `sync-collection` token can fail to advance under concurrent writes (token-window race)
 
@@ -319,6 +243,9 @@ These findings were verified fixed in the current tree and should be deleted fro
 - `contactctl export --format concat` seam normalization (fixed in `9a12b6c`)
 - `sync-collection` delta per-href collapse (duplicates / contradictory states) (fixed in `d97e4c8`)
 - Full `sync-collection` bootstrap includes live cards after journal prune (fixed in `213697e`)
+- `REPORT` XML namespace enforcement (fixed in `bfb28e8`)
+- `REPORT addressbook-multiget` target ownership/collection binding (fixed in `509b5db`)
+- `addressbook-multiget` href cap + dedupe (fixed in `bc694e9`)
 
 ## Notes
 
