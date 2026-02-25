@@ -753,15 +753,14 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 			return 0, 0, err
 		}
 		filePath := filepath.Join(dir, name)
-		if err := rejectImportSymlinkOrSpecialFile(filePath); err != nil {
+		f, info, err := openImportRegularFile(filePath)
+		if err != nil {
 			return 0, 0, fmt.Errorf("import file %s: %w", name, err)
 		}
-		raw, err := os.ReadFile(filePath)
+		raw, err := readImportRegularFileBytes(f, info, vcardMaxBytes)
+		_ = f.Close()
 		if err != nil {
 			return 0, 0, fmt.Errorf("read import file %s: %w", name, err)
-		}
-		if err := validateImportedVCardSize(raw, vcardMaxBytes); err != nil {
-			return 0, 0, fmt.Errorf("import file %s: %w", name, err)
 		}
 		card, err := decodeSingleCardBytes(raw)
 		if err != nil {
@@ -776,25 +775,65 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 	return applyImportedBatch(ctx, store, batch, dryRun)
 }
 
-func rejectImportSymlinkOrSpecialFile(p string) error {
-	info, err := os.Lstat(p)
+func openImportRegularFile(p string) (*os.File, os.FileInfo, error) {
+	linfo, err := os.Lstat(p)
 	if err != nil {
-		return fmt.Errorf("stat import file: %w", err)
+		return nil, nil, fmt.Errorf("stat import file: %w", err)
 	}
-	mode := info.Mode()
+	mode := linfo.Mode()
 	if mode&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing symlink import file")
+		return nil, nil, fmt.Errorf("refusing symlink import file")
 	}
 	if !mode.IsRegular() {
-		return fmt.Errorf("refusing non-regular import file")
+		return nil, nil, fmt.Errorf("refusing non-regular import file")
 	}
-	return nil
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open import file: %w", err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("stat open import file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("refusing non-regular import file")
+	}
+	// Best-effort race check: if the path was replaced between lstat and open, fail safe.
+	if !os.SameFile(linfo, info) {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("import file changed during open")
+	}
+	return f, info, nil
+}
+
+func readImportRegularFileBytes(f *os.File, info os.FileInfo, maxBytes int) ([]byte, error) {
+	if maxBytes > 0 && info.Size() > int64(maxBytes) {
+		return nil, fmt.Errorf("vcard too large: %d bytes exceeds max %d", info.Size(), maxBytes)
+	}
+	limit := int64(maxBytes)
+	if limit > 0 {
+		raw, err := io.ReadAll(io.LimitReader(f, limit+1))
+		if err != nil {
+			return nil, err
+		}
+		if err := validateImportedVCardSize(raw, maxBytes); err != nil {
+			return nil, err
+		}
+		return raw, nil
+	}
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID int64, path string, dryRun bool, vcardMaxBytes int) (int, int, error) {
-	f, err := os.Open(path)
+	f, _, err := openImportRegularFile(path)
 	if err != nil {
-		return 0, 0, fmt.Errorf("open import file: %w", err)
+		return 0, 0, err
 	}
 	defer func() { _ = f.Close() }()
 	dec := vcard.NewDecoder(f)

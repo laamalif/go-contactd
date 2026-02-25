@@ -6,11 +6,33 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/laamalif/go-contactd/internal/config"
 	"github.com/laamalif/go-contactd/internal/db"
 )
+
+func TestOpenImportRegularFile_RejectsFIFO(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	p := filepath.Join(tmp, "in.fifo")
+	if err := syscall.Mkfifo(p, 0o600); err != nil {
+		t.Skipf("mkfifo unsupported: %v", err)
+	}
+
+	f, _, err := openImportRegularFile(p)
+	if err == nil {
+		if f != nil {
+			_ = f.Close()
+		}
+		t.Fatal("openImportRegularFile error=nil, want non-regular rejection")
+	}
+	if got := err.Error(); !strings.Contains(got, "non-regular") {
+		t.Fatalf("err=%q want non-regular message", got)
+	}
+}
 
 func TestRunCLI_ExportConcat_WritesStoredVCardBytes(t *testing.T) {
 	t.Parallel()
