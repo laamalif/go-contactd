@@ -8,6 +8,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -3394,6 +3395,122 @@ func TestHandler_Report_AddressbookQuery_ReturnsCardsWithAddressData(t *testing.
 			t.Fatalf("response[%d] missing address-data: %+v", i, resp)
 		}
 	}
+}
+
+func TestHandler_Report_AddressData_StrongETagMatchesReturnedBytes_Multiget(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), "alice", "contacts")
+	if err != nil {
+		t.Fatalf("GetAddressbookByUsernameSlug: %v", err)
+	}
+	folded := "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-fold-report\r\nFN:Folded Report\r\nNOTE:" +
+		strings.Repeat("A", 90) + "\r\n " + strings.Repeat("B", 40) + "\r\nEND:VCARD\r\n"
+	if _, err := store.PutCard(context.Background(), db.PutCardInput{
+		AddressbookID: ab.ID,
+		Href:          "folded.vcf",
+		UID:           "uid-fold-report",
+		VCard:         []byte(folded),
+	}); err != nil {
+		t.Fatalf("PutCard folded: %v", err)
+	}
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:addressbook-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:prop><D:getetag/><C:address-data/></D:prop>
+  <D:href>/alice/contacts/folded.vcf</D:href>
+</C:addressbook-multiget>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("REPORT multiget status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	etag, addrData := extractFirstReportETagAndAddressDataRaw(t, rr.Body.String())
+	wantETag := `"` + fmt.Sprintf("%x", sha256.Sum256([]byte(addrData))) + `"`
+	if etag != wantETag {
+		t.Fatalf("REPORT multiget ETag = %q, want SHA256(address-data) %q", etag, wantETag)
+	}
+}
+
+func TestHandler_Report_AddressData_StrongETagMatchesReturnedBytes_Query(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ab, err := store.GetAddressbookByUsernameSlug(context.Background(), "alice", "contacts")
+	if err != nil {
+		t.Fatalf("GetAddressbookByUsernameSlug: %v", err)
+	}
+	folded := "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-fold-query\r\nFN:Folded Query\r\nNOTE:" +
+		strings.Repeat("A", 90) + "\r\n " + strings.Repeat("B", 40) + "\r\nEND:VCARD\r\n"
+	if _, err := store.PutCard(context.Background(), db.PutCardInput{
+		AddressbookID: ab.ID,
+		Href:          "folded.vcf",
+		UID:           "uid-fold-query",
+		VCard:         []byte(folded),
+	}); err != nil {
+		t.Fatalf("PutCard folded: %v", err)
+	}
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:prop><D:getetag/><C:address-data/></D:prop>
+</C:addressbook-query>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("REPORT query status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	etag, addrData := extractFirstReportETagAndAddressDataRaw(t, rr.Body.String())
+	wantETag := `"` + fmt.Sprintf("%x", sha256.Sum256([]byte(addrData))) + `"`
+	if etag != wantETag {
+		t.Fatalf("REPORT query ETag = %q, want SHA256(address-data) %q", etag, wantETag)
+	}
+}
+
+func extractFirstReportETagAndAddressDataRaw(t *testing.T, body string) (string, string) {
+	t.Helper()
+	reETag := regexp.MustCompile(`(?s)<getetag(?:\s[^>]*)?>(.*?)</getetag>`)
+	reAddr := regexp.MustCompile(`(?s)<address-data(?:\s[^>]*)?>(.*?)</address-data>`)
+	mETag := reETag.FindStringSubmatch(body)
+	if len(mETag) != 2 {
+		t.Fatalf("missing getetag in body=%q", body)
+	}
+	mAddr := reAddr.FindStringSubmatch(body)
+	if len(mAddr) != 2 {
+		t.Fatalf("missing address-data in body=%q", body)
+	}
+	return html.UnescapeString(mETag[1]), html.UnescapeString(mAddr[1])
 }
 
 func TestHandler_Report_SyncCollection_WrongNamespaceLimitIgnored(t *testing.T) {

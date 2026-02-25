@@ -1040,7 +1040,16 @@ func (h *handler) handleAddressbookMultiGet(w http.ResponseWriter, r *http.Reque
 		}
 		seen[canonicalHref] = struct{}{}
 
-		ao, err := h.opts.Backend.GetAddressObject(r.Context(), canonicalHref, nil)
+		var (
+			ao  *gocarddav.AddressObject
+			raw []byte
+			err error
+		)
+		if be, ok := h.opts.Backend.(addressObjectGetWithRaw); ok {
+			ao, raw, err = be.GetAddressObjectWithRaw(r.Context(), canonicalHref, nil)
+		} else {
+			ao, err = h.opts.Backend.GetAddressObject(r.Context(), canonicalHref, nil)
+		}
 		if err != nil {
 			if status, ok := httpStatusFromError(err); ok && status == http.StatusNotFound {
 				responses = append(responses, davxml.Response{
@@ -1053,7 +1062,7 @@ func (h *handler) handleAddressbookMultiGet(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		resp, err := reportCardResponse(*ao)
+		resp, err := reportCardResponse(*ao, raw)
 		if err != nil {
 			http.Error(w, "invalid vcard", http.StatusInternalServerError)
 			return
@@ -1073,7 +1082,16 @@ func (h *handler) handleAddressbookQuery(w http.ResponseWriter, r *http.Request)
 	}
 	responses := make([]davxml.Response, 0, len(aos))
 	for _, ao := range aos {
-		resp, err := reportCardResponse(ao)
+		var raw []byte
+		if be, ok := h.opts.Backend.(addressObjectGetWithRaw); ok {
+			_, gotRaw, rawErr := be.GetAddressObjectWithRaw(r.Context(), ao.Path, nil)
+			if rawErr != nil {
+				writeBackendError(w, rawErr)
+				return
+			}
+			raw = gotRaw
+		}
+		resp, err := reportCardResponse(ao, raw)
 		if err != nil {
 			http.Error(w, "invalid vcard", http.StatusInternalServerError)
 			return
@@ -1751,17 +1769,20 @@ func writeDAVMultiStatus(w http.ResponseWriter, responses []davxml.Response) {
 	_, _ = w.Write(body)
 }
 
-func reportCardResponse(ao gocarddav.AddressObject) (davxml.Response, error) {
-	var buf bytes.Buffer
-	if err := vcard.NewEncoder(&buf).Encode(ao.Card); err != nil {
-		return davxml.Response{}, err
+func reportCardResponse(ao gocarddav.AddressObject, raw []byte) (davxml.Response, error) {
+	if raw == nil {
+		var buf bytes.Buffer
+		if err := vcard.NewEncoder(&buf).Encode(ao.Card); err != nil {
+			return davxml.Response{}, err
+		}
+		raw = buf.Bytes()
 	}
 	return davxml.Response{
 		Href: ao.Path,
 		PropStats: []davxml.PropStat{
 			davxml.PropStatOK(davxml.Prop{
 				GetETag:     ao.ETag,
-				AddressData: buf.String(),
+				AddressData: string(raw),
 			}),
 		},
 	}, nil
