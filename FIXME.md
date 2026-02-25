@@ -58,36 +58,34 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - Repeated failed auth attempts trigger throttle behavior (without breaking valid auth semantics)
   - Throttle keying behavior documented and tested (direct remote vs trusted proxy mode)
 
-### FIXME-019 (P1) `contactctl import` lacks bounded reads and stable file handles for untrusted file inputs (local CLI DoS / TOCTOU hang risk)
+### FIXME-019 (P1) `contactctl import` still lacks full bounded-read and content-TOCTOU hardening for untrusted file inputs (local CLI DoS / tamper risk)
 
-- Status: validated by code inspection (current-tree follow-up after symlink hardening)
+- Status: partially fixed (`f03d63b`); remaining risk validated by code inspection and TODO repro evidence
 - Impact:
-  - `contactctl import` can consume excessive memory or hang on hostile local inputs because size checks occur after full reads (dir mode) or after streaming decode work (concat mode).
-  - Directory import is vulnerable to file-type/content TOCTOU races (e.g. regular file swapped to FIFO after enumeration/check), which can hang the import run.
+  - `contactctl import` still lacks a total-input bound for concat mode and can spend unbounded decode/read work on large regular files.
   - Directory import can also ingest tampered content that was not present at initial directory snapshot (regular-file content swap race).
   - This is a local/admin-path availability issue, not a remote HTTP issue.
 - Affected code:
   - `internal/ctl/ctl.go` (`importFromDir`)
   - `internal/ctl/ctl.go` (`importFromConcatFile`)
 - Root cause:
-  - Directory mode reads entire file with `os.ReadFile(...)` before `validateImportedVCardSize(...)`.
-  - Directory mode enumerates names and later re-opens by path; file type/content can change between checks and reads (no stable handle workflow).
-  - Concat mode streams from `os.Open(...)` into `vcard.NewDecoder(...)` with no `io.LimitedReader` / byte cap for the input stream.
-  - Symlink/non-regular rejection in dir mode (fixed in `89d03cf`) prevents `/dev/zero`-via-symlink there, but does not solve bounded-read behavior in general.
+  - Remaining concat mode streams from a regular file handle into `vcard.NewDecoder(...)` with no total-input `io.LimitedReader` / byte cap for the overall stream.
+  - Directory mode still enumerates names and later opens by path; content can change between directory snapshot and later open/read (regular-file content TOCTOU), even though file-type/symlink checks are improved.
+- Partial fixes already applied:
+  - `89d03cf`: rejects symlink/non-regular dir import entries via path checks
+  - `f03d63b`: opens import files via stable handle, revalidates opened descriptor type, rejects non-regular concat sources, and bounds dir-mode file reads before full load
 - Revalidated evidence (from TODO):
-  - FIFO-swap race on a later file caused import hang/timeout (`import_rc=124`) after progress, demonstrating path-type TOCTOU on reopen.
   - Regular-file swap race changed imported content while import still exited success (`race_benign=0`, `race_evil=1`), demonstrating content TOCTOU.
 - Suggested fix:
-  - Directory mode:
-    - open files via a stable handle, `fstat` the opened descriptor, and reject non-regular files on the descriptor
-    - enforce size cap before full read (for regular files) and/or read via bounded reader
   - Concat mode: wrap input with a bounded reader (or enforce a total input cap / per-card cap during decode).
-  - Consider rejecting direct non-regular concat import sources as well (similar to dir-mode source checks).
+  - Optional stronger dir-mode hardening:
+    - use directory FD + openat-style workflow (or equivalent) to reduce name-to-content TOCTOU surface further
+    - hash/mtime/inode revalidation strategy if snapshot consistency is desired
 - Tests to add:
   - oversized regular `.vcf` in dir mode is rejected without reading entire file into memory (best-effort behavioral test)
-  - dir import FIFO/file-type swap race does not hang (or is rejected deterministically)
   - dir import regular-file content swap cannot alter imported bytes after snapshot/open (best-effort deterministic harness)
   - concat import from non-regular source is rejected (or bounded) deterministically
+  - concat import total-input cap is enforced on large regular files
 
 ### FIXME-022 (P2) `contactctl import --dry-run` is non-snapshot and can diverge materially from immediate real import under concurrent writers
 
