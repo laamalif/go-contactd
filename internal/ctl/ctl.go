@@ -170,6 +170,7 @@ func printImportHelp(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  directory input: imports *.vcf files, href is the filename")
 	_, _ = fmt.Fprintln(w, "  file input: imports concatenated vCards, href is <UID>.vcf")
 	_, _ = fmt.Fprintln(w, "  --dry-run: parse/validate and summarize without writing to the database")
+	_, _ = fmt.Fprintln(w, "             advisory only; concurrent writes can change real import results")
 }
 
 func runUserAdd(args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer) int {

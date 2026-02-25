@@ -34,6 +34,26 @@ func TestOpenImportRegularFile_RejectsFIFO(t *testing.T) {
 	}
 }
 
+func TestRunCLI_ImportHelp_DryRunWarnsAdvisoryUnderConcurrency(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{"import", "--help"}, nil, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 0 {
+		t.Fatalf("code=%d want 0 stderr=%q", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr=%q want empty", stderr.String())
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "--dry-run") {
+		t.Fatalf("stdout=%q want --dry-run help", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "advisory") || !strings.Contains(strings.ToLower(got), "concurrent") {
+		t.Fatalf("stdout=%q want advisory/concurrent dry-run warning", got)
+	}
+}
+
 func TestRunCLI_ExportConcat_WritesStoredVCardBytes(t *testing.T) {
 	t.Parallel()
 
