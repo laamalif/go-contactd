@@ -48,6 +48,8 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - A `REPORT` to `/alice/contacts/` can request hrefs from another collection under the same principal (including traversal-normalized hrefs) and receive data from that other collection.
   - A `REPORT` sent to a cross-tenant or nonexistent target collection path (for example `/bob/contacts/` or `/doesnotexist/x/`) can still return caller-owned card data if the body `href`s point at caller-owned resources.
   - This also combines with traversal-style body hrefs (for example `/alice/contacts/../private/p.vcf`) to bypass collection boundaries while returning normalized leaked hrefs.
+  - When combined with `FIXME-003` (namespace confusion), malformed-namespace multiget payloads can still exfiltrate same-principal cross-collection data and bypass target-path intent.
+  - Method-level authorization behavior is inconsistent on the same target path (e.g. `addressbook-query` correctly returns `404`, while `addressbook-multiget` can return `207` + caller-owned data).
 - Affected code:
   - `internal/server/handler.go` (`handleAddressbookMultiGet`)
   - `internal/carddav/backend.go` (`parseCardPathForPrincipal` normalizes path and validates only principal ownership)
@@ -67,6 +69,7 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - Cross-collection href returns `404` prop response in multiget.
   - Traversal-style href (`../private/...`) returns `404` and does not leak normalized target.
   - Malformed-namespace multiget (`X:addressbook-multiget`) does not bypass the above checks (after `FIXME-003`).
+  - Relative hrefs in multiget request body are either rejected or normalized and still collection-bound (no bypass).
 
 ### FIXME-003 (P2) `REPORT` namespace confusion (local-name-only dispatch and field parsing)
 
@@ -86,6 +89,10 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - Non-DAV `X:sync-collection` rejected.
   - Non-DAV `X:limit` / `X:sync-token` do not affect sync behavior.
   - Non-CardDAV `X:addressbook-multiget` rejected.
+- Revalidated evidence (from TODO):
+  - `X:addressbook-multiget` + `Y:href` payloads are accepted (`207`) and can drive multiget behavior.
+  - Combined with `FIXME-002`, malformed-namespace payloads can return private same-principal cards from unrelated or invalid REPORT targets.
+  - Namespace-less `<addressbook-multiget><href>...` payloads also drive the same behavior.
 
 ### FIXME-004 (P2) `PROPPATCH` namespace confusion and malformed mixed-namespace structure acceptance
 
@@ -133,10 +140,13 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 - Tests to add:
   - `%00`, `%09`, `%0A`, `%0D`, `%7F` path segment payloads rejected with `400`.
 
-### FIXME-007 (P2) `addressbook-multiget` has no href count cap or dedupe (response amplification / N-query behavior)
+### FIXME-007 (P1) `addressbook-multiget` has no href count cap or dedupe (response amplification / DoS risk)
 
 - Status: validated (code inspection)
 - Impact: Large multiget requests with duplicate hrefs can cause large duplicate responses and expensive repeated backend lookups.
+  - Strong authenticated amplification is possible (small request -> large response) and can drive CPU/DB/serialization load.
+  - Handler builds the full multistatus response in memory before writing, increasing memory pressure risk under large href fan-out.
+  - Under concurrent fan-out bursts, the daemon can be terminated (observed exit `137`, likely OOM kill), causing service outage.
 - Affected code:
   - `internal/server/handler.go` (`handleAddressbookMultiGet`)
 - Root cause:
@@ -147,6 +157,11 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 - Tests to add:
   - Duplicate hrefs are deduped (or capped) with predictable result behavior.
   - Large href count rejected or truncated per defined policy.
+- Revalidated evidence (from TODO):
+  - Example amplification: `req_bytes=1915` -> `resp_bytes≈10.5MB` with duplicated hrefs and a large card.
+  - Example large fan-out: `120,000` hrefs produced `207` with `resp_bytes≈53.5MB` and long processing time.
+  - Concurrent fan-out test (3 requests x 12,000 duplicate hrefs on ~131 KiB card) caused daemon process death (`exit_status=137`) and `curl` empty replies.
+  - Repeated campaign result: only 2 concurrent requests with 12,000 duplicate hrefs on a ~131 KiB card reproduced daemon death (`alive=0`, `exit=137`) and `curl` empty replies.
 
 ### FIXME-008 (P1) `sync-collection` token can fail to advance under concurrent writes (token-window race)
 
@@ -163,24 +178,62 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 - Tests to add:
   - Deterministic race test proving returned delta always advances token when any change item is returned.
 
-### FIXME-009 (P1) Username enumeration timing side-channel in Basic Auth
+### FIXME-021 (P1) `sync-collection` delta emits raw journal rows without per-href collapse (duplicates / contradictory states in one page)
 
-- Status: validated (code inspection)
-- Impact: Missing usernames return much faster than existing usernames with wrong password, allowing enumeration via timing.
+- Status: validated by code inspection; TODO includes reproducible evidence
+- Impact:
+  - A single sync response can contain the same href multiple times after rapid mutations.
+  - A single page can contain contradictory states for one href (e.g. one update with `getetag` plus one `404` delete tombstone).
+  - Clients may replay duplicate work or observe ambiguous final state from one sync page.
 - Affected code:
-  - `internal/db/store.go` (`AuthenticateUser`)
+  - `internal/carddavx/sync.go` (`SyncCollection`, delta-token path)
 - Root cause:
-  - `sql.ErrNoRows` returns immediately without bcrypt work.
-  - Existing user path performs bcrypt compare.
+  - Delta sync appends each `card_changes` row directly to `Updated` / `Deleted` with no per-href coalescing to final state for the requested token window.
 - Revalidated evidence (from TODO):
-  - `alice:wrong` median ~`0.080839s`
-  - `nosuchuser:wrong` median ~`0.000567s`
-  - gap ~`142x` while both return `401`
+  - Rapid 3x PUT to the same href produced `dup_href_count=3` in one sync response (same href repeated with different ETags).
+  - PUT then DELETE for one href produced both an `etag` update entry and a `404` delete entry in the same sync response.
 - Suggested fix:
-  - Always perform a bcrypt compare using a fixed dummy hash on missing-user path.
-  - Keep response body/status/challenge behavior identical.
+  - Collapse changes per href within the returned window to the latest effective state before building the response.
+  - Preserve token advancement/truncation semantics while coalescing (especially with page limits).
+  - Define and test deterministic ordering for the collapsed output.
 - Tests to add:
-  - Functional behavior remains identical for missing vs wrong-password (timing test can be optional / benchmark-style).
+  - multiple updates to same href collapse to one latest update entry
+  - update+delete in same window collapses to one delete entry
+  - delete+recreate in same window collapses to one latest update entry (if supported by journal ordering)
+
+### FIXME-016 (P1) No auth throttling/lockout/rate-limit enables practical password spraying after enumeration
+
+- Status: validated operationally (TODO includes attack-chain repro); code inspection confirms no throttling/lockout in auth path
+- Impact:
+  - Attackers can combine `FIXME-009` (username enumeration) with unlimited online password attempts.
+  - Legitimate authentication remains available after large failed-attempt bursts, enabling ongoing spraying without server-enforced delay/lockout.
+  - Credential-validity oracles (`401` vs non-`401`) work across methods and nonexistent paths, making spray verification cheap and flexible.
+- Affected code:
+  - `internal/server/handler.go` (`requireBasicAuth`)
+  - `internal/db/store.go` (`AuthenticateUser`)
+  - `internal/daemon/daemon.go` (no auth middleware throttling/rate-limit wiring)
+- Root cause:
+  - No per-IP / per-username / global failed-auth throttling, no lockout window, no backoff.
+- Revalidated evidence (from TODO):
+  - After `400` failed attempts for `alice`, legitimate auth still succeeded immediately.
+  - Chained demo: enumerate top usernames, then spray candidate passwords until a success indicator (`non-401`) is observed.
+  - Fast stuffing chain demo: exact top-3 users enumerated, then password spray found a valid credential in ~`0.387s` for `18` attempts.
+  - Specific spray-chain evidence:
+    - `enum_top3=alice,bob,charlie`
+    - `spray_hit user=alice pass=welcome1 code=404`
+    - `spray_elapsed_s=0.387 attempts=18 hits=1`
+  - Credential-validity oracle works on arbitrary nonexistent protected paths:
+    - valid creds on nonexistent path -> `404`
+    - invalid creds on nonexistent path -> `401`
+    - attacker does not need a known existing resource path to verify sprayed credentials
+  - Oracle also works across methods (example `OPTIONS /not-real`: valid creds -> `204`, invalid creds -> `401`)
+- Suggested fix:
+  - Add optional auth throttling / rate-limiting in the HTTP auth path (per-IP and/or per-username dimensions).
+  - Consider randomized small delay or token-bucket controls.
+  - Keep default behavior/operator UX in mind (document tradeoffs and trusted-proxy interactions).
+- Tests to add:
+  - Repeated failed auth attempts trigger throttle behavior (without breaking valid auth semantics)
+  - Throttle keying behavior documented and tested (direct remote vs trusted proxy mode)
 
 ### FIXME-010 (P2) Unauthenticated path-validation oracle (`400` before `401`)
 
@@ -198,6 +251,165 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 - Tests to add:
   - No-auth invalid protected path returns the same auth challenge behavior as a valid protected path.
 
+### FIXME-013 (P1) Full `sync-collection` (empty token) can omit live cards after normal journal pruning
+
+- Status: validated (code inspection; TODO includes reproducible evidence with age/max-revision prune)
+- Impact:
+  - A client performing a full sync (`sync-token` empty) can miss existing cards permanently if those cards' `card_changes` rows were pruned.
+  - This can happen under normal startup/background prune behavior (age prune and configured max-revisions prune).
+- Affected code:
+  - `internal/carddavx/sync.go` (`SyncCollection`, empty-token path)
+  - `internal/db/store.go` (`ListCurrentCardSyncStates`)
+  - `internal/daemon/daemon.go` (prune startup/ticker wiring)
+- Root cause:
+  - Full-sync state query uses `cards JOIN card_changes` and derives per-card revision from `MAX(card_changes.revision)`.
+  - If pruning removes all `card_changes` rows for a still-live card, that card disappears from the full-sync state view.
+- Revalidated evidence (from TODO):
+  - Max-revisions prune repro:
+    - `db_cards=60`, `db_changes=1`
+    - `addressbook-query` count = `60`
+    - empty-token `sync-collection` count = `1`, token `urn:contactd:sync:1:60`
+  - Age-prune repro:
+    - `db_cards=30`, `db_changes=0`
+    - `addressbook-query` count = `30`
+    - empty-token `sync-collection` count = `0`, token `urn:contactd:sync:1:30`
+    - repeat sync with that token remains empty while `addressbook-query` still shows all cards
+- Suggested fix:
+  - Ensure full-sync enumerates all live cards from `cards`, even if change history was pruned.
+  - Options:
+    - preserve at least the latest `card_changes` row per live card during prune, or
+    - persist last-change revision on `cards`, or
+    - use a left join with a fallback revision strategy that still includes all live cards (carefully preserving ordering/token semantics).
+- Tests to add:
+  - full sync after `PruneCardChangesByMaxRevisions` still returns all live cards
+  - full sync after age prune still returns all live cards
+
+### FIXME-023 (P1) Background prune can invalidate freshly issued `sync-collection` continuation tokens mid-pagination
+
+- Status: validated by TODO repro evidence; code inspection confirms mechanism in stale-token gap detection
+- Impact:
+  - A client can receive a continuation token from page 1 and then immediately get `403 valid-sync-token` on page 2 during normal operation if pruning runs between requests.
+  - This causes pagination churn/full-resync loops despite correct client behavior.
+- Affected code:
+  - `internal/carddavx/sync.go` (`SyncCollection`, delta path gap detection)
+  - `internal/daemon/daemon.go` (background prune ticker)
+  - `internal/db/store.go` (prune by max revisions / age)
+- Root cause:
+  - Gap detection intentionally rejects tokens when intermediate revisions are missing.
+  - Background pruning can remove those intermediate revisions after the server has already issued a continuation token.
+- Revalidated evidence (from TODO):
+  - With `--change-retention-max-revisions 3 --prune-interval 1s`:
+    - page 1 returned `page1_token=urn:contactd:sync:1:12`
+    - prune reduced journal to `post_prune_changes=3`
+    - page 2 with that token returned `403` + `valid-sync-token`
+- Suggested fix:
+  - Prevent pruning from invalidating freshly issued pagination tokens within a practical sync window, or
+  - move pagination to a stable snapshot/watermark model, or
+  - document aggressive-prune behavior and recommend retention settings that exceed sync page completion windows (minimum mitigation).
+- Tests to add:
+  - page-1 continuation token remains valid across a prune tick (for chosen mitigation), or
+  - explicit regression/docs test capturing current behavior if kept by design
+
+### FIXME-014 (P2) `contactctl export --format concat` can emit an invalid backup seam
+
+- Status: validated by code inspection (TODO includes reproducible evidence)
+- Impact:
+  - If stored cards do not end with a trailing newline after `END:VCARD`, concat export writes cards back-to-back with no separator, producing an invalid stream (e.g. `END:VCARDBEGIN:VCARD`) that may fail re-import.
+- Affected code:
+  - `internal/ctl/ctl.go` (`writeConcatExportFile`)
+  - upstream data path involved:
+  - `internal/db/store.go` (`CanonicalizeVCard`) normalizes line endings but does not guarantee a terminal newline
+- Root cause:
+  - Concat export writes raw stored vCards as-is with no separator normalization between cards.
+- Suggested fix:
+  - Normalize concat export boundaries by ensuring exactly one `\r\n` separator between cards (without mutating bytes within each card body).
+  - Define/export a clear contract for concat format (e.g. each card ends with CRLF).
+- Tests to add:
+  - two valid cards with no trailing newline export to a re-importable concat stream
+  - existing normal cards remain exportable/importable without duplication of blank lines
+
+### FIXME-019 (P1) `contactctl import` lacks bounded reads and stable file handles for untrusted file inputs (local CLI DoS / TOCTOU hang risk)
+
+- Status: validated by code inspection (current-tree follow-up after symlink hardening)
+- Impact:
+  - `contactctl import` can consume excessive memory or hang on hostile local inputs because size checks occur after full reads (dir mode) or after streaming decode work (concat mode).
+  - Directory import is vulnerable to file-type/content TOCTOU races (e.g. regular file swapped to FIFO after enumeration/check), which can hang the import run.
+  - Directory import can also ingest tampered content that was not present at initial directory snapshot (regular-file content swap race).
+  - This is a local/admin-path availability issue, not a remote HTTP issue.
+- Affected code:
+  - `internal/ctl/ctl.go` (`importFromDir`)
+  - `internal/ctl/ctl.go` (`importFromConcatFile`)
+- Root cause:
+  - Directory mode reads entire file with `os.ReadFile(...)` before `validateImportedVCardSize(...)`.
+  - Directory mode enumerates names and later re-opens by path; file type/content can change between checks and reads (no stable handle workflow).
+  - Concat mode streams from `os.Open(...)` into `vcard.NewDecoder(...)` with no `io.LimitedReader` / byte cap for the input stream.
+  - Symlink/non-regular rejection in dir mode (fixed in `89d03cf`) prevents `/dev/zero`-via-symlink there, but does not solve bounded-read behavior in general.
+- Revalidated evidence (from TODO):
+  - FIFO-swap race on a later file caused import hang/timeout (`import_rc=124`) after progress, demonstrating path-type TOCTOU on reopen.
+  - Regular-file swap race changed imported content while import still exited success (`race_benign=0`, `race_evil=1`), demonstrating content TOCTOU.
+- Suggested fix:
+  - Directory mode:
+    - open files via a stable handle, `fstat` the opened descriptor, and reject non-regular files on the descriptor
+    - enforce size cap before full read (for regular files) and/or read via bounded reader
+  - Concat mode: wrap input with a bounded reader (or enforce a total input cap / per-card cap during decode).
+  - Consider rejecting direct non-regular concat import sources as well (similar to dir-mode source checks).
+- Tests to add:
+  - oversized regular `.vcf` in dir mode is rejected without reading entire file into memory (best-effort behavioral test)
+  - dir import FIFO/file-type swap race does not hang (or is rejected deterministically)
+  - dir import regular-file content swap cannot alter imported bytes after snapshot/open (best-effort deterministic harness)
+  - concat import from non-regular source is rejected (or bounded) deterministically
+
+### FIXME-020 (P1) `contactctl export --format dir` is vulnerable to hardlink/TOCTOU clobber in attacker-controlled output directory
+
+- Status: validated operationally (TODO includes reproducible hardlink race); current symlink fix does not cover hardlinks/replace races
+- Impact:
+  - An attacker with write access to the export directory can race and plant a hardlink at a predictable export filename, causing export to overwrite an external file via shared inode.
+  - An attacker can also replace a checked destination path with a FIFO between check and write, causing export to block/hang on write.
+  - This is a local filesystem integrity risk for admin exports into untrusted directories.
+- Affected code:
+  - `internal/ctl/ctl.go` (`writeDirExport`)
+- Root cause:
+  - Export writes directly to `out/<href>.vcf` with `os.WriteFile(...)` (in-place truncate/write).
+  - Current check rejects symlinks/non-regular files, but a hardlink is a regular file and passes the check.
+  - There is also a TOCTOU window between path check and `WriteFile`.
+- Revalidated evidence (from TODO):
+  - Predictable last-filename race planted `out/zzzzz.vcf -> target.txt` (hardlink) before final write.
+  - Export succeeded and external target was overwritten (`target_head=BEGIN:VCARD`, `target_nlink=2`).
+  - FIFO replacement race on a predictable later filename caused export hang/timeout (`export_rc=124`), leaving a FIFO in the output dir.
+- Suggested fix:
+  - Avoid in-place writes to final path in directory export.
+  - Write to a temp file in the export directory and `rename` into place (rename replaces the directory entry, avoiding hardlink-target clobber).
+  - Revalidate destination path semantics around rename if overwrite behavior is retained.
+  - Consider an option to refuse overwriting existing files entirely (safer backup mode).
+- Tests to add:
+  - hardlink destination race/clobber regression (best-effort deterministic harness or unit-level helper test)
+  - FIFO replacement race does not hang export (best-effort deterministic harness)
+  - normal dir export still works with temp+rename strategy
+
+### FIXME-022 (P2) `contactctl import --dry-run` is non-snapshot and can diverge materially from immediate real import under concurrent writers
+
+- Status: validated conceptually and by TODO repro evidence; current-tree root cause corrected
+- Impact:
+  - `--dry-run` create/update counts (or success/failure expectation) can be wrong when the target addressbook changes concurrently between dry-run classification and the subsequent real import run.
+  - Operators may treat dry-run as a reliable preview, but it is advisory only under concurrency.
+- Affected code:
+  - `internal/ctl/ctl.go` (`applyImportedBatch`, dry-run path; `putOrClassifyImportedCard`)
+- Root cause (current tree):
+  - Dry-run classification uses live point-in-time reads (`GetCard`, `ListCards`) without snapshot isolation/locking across the batch.
+  - Real import is batch-atomic (`PutCardsAtomic`) now, so prior reports citing per-file commits are stale; divergence is due to concurrent mutation between runs, not partial writes by import itself.
+- Revalidated evidence (from TODO):
+  - Dry-run predicted `created=12001 updated=0`; concurrent writer changed outcome to either:
+    - import failure (`UNIQUE ... uid`) while external concurrent write persisted, or
+    - count drift (`created=12000 updated=1`) without import failure.
+- Suggested fix:
+  - At minimum, document `--dry-run` as advisory and non-snapshot under concurrent writers.
+  - Optional hardening:
+    - add a snapshot/lock mode for dry-run + import planning, or
+    - compare and report drift risk (best effort) before commit.
+- Tests to add:
+  - regression demonstrating dry-run drift under concurrent writer (if deterministic harness is maintainable)
+  - documentation/help test clarifying advisory semantics (if wording is codified)
+
 ## Already Fixed (remove from `TODO`)
 
 These findings were verified fixed in the current tree and should be deleted from `TODO`:
@@ -206,8 +418,12 @@ These findings were verified fixed in the current tree and should be deleted fro
 - Strong ETag mismatch vs GET bytes (fixed in `2a18321`)
 - Import partial commit / non-atomic batch failure (fixed in `84d8c9d`)
 - Directory import trailing garbage / multi-card single-file acceptance (fixed in `b46f873`)
-- `contactctl import` directory symlink read escape (fixed locally, pending commit)
-- `contactctl export` symlink output clobber (`dir` and `concat --out`) (fixed locally, pending commit)
+- `contactctl import` directory symlink read escape (fixed in `89d03cf`)
+- `contactctl export` symlink output clobber (`dir` and `concat --out`) (fixed in `89d03cf`)
+- Basic Auth missing-user timing parity / dummy bcrypt compare (fixed in `1e7a4c5`)
+- Duplicate `Authorization` header ambiguity (duplicate/comma-combined headers rejected) (fixed in `9f6e261`)
+- Oversized Basic `Authorization` header rejection (`431`) (fixed in `3d076c5`)
+- HTTP server timeout defaults (`ReadHeaderTimeout`/`ReadTimeout`/`WriteTimeout`/`IdleTimeout`) (fixed in `cb4f34e`)
 
 ## Notes
 
