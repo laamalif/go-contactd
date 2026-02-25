@@ -44,6 +44,11 @@ const syncServerPageLimit = 500
 const maxAuthorizationHeaderBytes = 8192
 const maxReportMultigetHrefs = 1000
 const defaultReportMaxResponseBytes = 16 << 20 // 16 MiB
+const (
+	maxProppatchDisplayNameBytes            = 256
+	maxProppatchAddressbookDescriptionBytes = 4096
+	maxProppatchAddressbookColorBytes       = 64
+)
 
 func NewHandler(opts HandlerOptions) http.Handler {
 	if opts.Logger == nil {
@@ -911,6 +916,18 @@ func (h *handler) handleProppatch(w http.ResponseWriter, r *http.Request) {
 		default:
 			unsupported = append(unsupported, davxml.RawProp{XMLName: op.Name})
 		}
+	}
+	if displayname != nil && len(*displayname) > maxProppatchDisplayNameBytes {
+		http.Error(w, "displayname too large", http.StatusBadRequest)
+		return
+	}
+	if description != nil && len(*description) > maxProppatchAddressbookDescriptionBytes {
+		http.Error(w, "addressbook-description too large", http.StatusBadRequest)
+		return
+	}
+	if color != nil && len(*color) > maxProppatchAddressbookColorBytes {
+		http.Error(w, "addressbook-color too large", http.StatusBadRequest)
+		return
 	}
 	if (displayname != nil || description != nil || color != nil) && h.opts.Backend != nil {
 		updater, ok := h.opts.Backend.(addressbookMetadataUpdater)
