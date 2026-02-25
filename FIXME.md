@@ -66,31 +66,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - concat import from non-regular source is rejected (already covered; keep regression)
   - concat import total-input cap is enforced on large regular files (already covered; keep regression)
 
-### FIXME-024 (P1) Large full-sync pagination can still fail after prune when continuation cursor cache is skipped
-
-- Status: validated by code inspection and user repro evidence
-- Impact:
-  - `sync-collection` with empty token and `nresults` can return a truncated first page, then reject the server-issued continuation token on page 2 after journal prune.
-  - New/reset clients syncing large addressbooks can fail mid-bootstrap under normal prune operation and may churn into full-resync retries.
-- Affected code:
-  - `internal/carddavx/sync.go` (`buildPagedSyncResult`, `SyncCollection`)
-  - `internal/db/store.go` (`ListCurrentCardSyncStates`)
-- Root cause:
-  - Full-sync pagination relies on the in-memory continuation cursor cache when `len(remaining) <= syncCursorMaxItems`.
-  - For large addressbooks (`remaining > syncCursorMaxItems`), no cursor is stored and page-2 falls back to journal delta lookup (`ListCardChangesSince`).
-  - After prune (especially post-prune full-sync states with revision `0`), that fallback can hit the stale-token path and reject the just-issued continuation token.
-- Revalidated evidence (from user repro):
-  - Failing case: `n=10060`, prune all `card_changes`, empty-token sync with `limit=50`
-    - page1 `truncated=true`, token `urn:contactd:sync:1:0`
-    - page2 with that token -> `invalid sync token: stale token`
-  - Control case: `n=10030` (below cache threshold), page2 succeeds
-- Suggested fix:
-  - Preserve continuation state for full-sync pagination even when remaining items exceed `syncCursorMaxItems` (chunked cursor storage / paged cursor references / alternate full-sync continuation path).
-  - Avoid falling back to journal delta semantics for a full-sync continuation token issued from a truncated empty-token response.
-- Tests to add:
-  - deterministic service test with >`syncCursorMaxItems` full-sync items, prune between pages, page2 continuation still succeeds
-  - HTTP-level regression for `REPORT sync-collection` empty-token pagination > cache threshold (optional; may be heavy)
-
 ### FIXME-027 (P1) REPORT multistatus responses are fully marshaled in memory (authenticated response-amplification memory DoS)
 
 - Status: validated by code inspection and user repro evidence
@@ -143,6 +118,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - `sync-collection` delta per-href collapse (duplicates / contradictory states) (fixed in `d97e4c8`)
 - Full `sync-collection` bootstrap includes live cards after journal prune (fixed in `213697e`)
 - `sync-collection` continuation pages remain valid across prune (fixed in `fe65dde`)
+- Large full-sync pagination continuation remains cached beyond legacy threshold (fixed in `cdfbb45`)
 - `REPORT` XML namespace enforcement (fixed in `bfb28e8`)
 - `REPORT addressbook-multiget` target ownership/collection binding (fixed in `509b5db`)
 - `addressbook-multiget` href cap + dedupe (fixed in `bc694e9`)
