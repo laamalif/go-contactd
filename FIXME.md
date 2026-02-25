@@ -24,33 +24,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - Non-DAV root rejected.
   - `X:set` / mixed namespace structure rejected and no metadata mutation occurs.
 
-### FIXME-005 (P2) `REPORT`/`PROPPATCH` accept trailing XML content (multi-root / trailing garbage)
-
-- Status: validated (code inspection)
-- Impact: Valid first XML document can be processed even when extra top-level content follows.
-- Affected code:
-  - `internal/server/handler.go` (`handleReport`) uses one `Decode` call without EOF/trailing-content check
-  - `internal/server/handler.go` (`parseProppatchRequest`) token loop does not enforce a single top-level document root
-- Suggested fix:
-  - Add strict trailing-content checks after parse (ignoring only whitespace/comments).
-  - Reject extra top-level elements with `400`.
-- Tests to add:
-  - valid REPORT + trailing `<X:evil/>` rejected.
-  - valid PROPPATCH + trailing `<X:evil/>` rejected and state unchanged.
-
-### FIXME-006 (P2) Control characters in path segments are accepted
-
-- Status: validated (code inspection)
-- Impact: Encoded control bytes in path segments can be used to create and operate on collections (`MKCOL` / `PROPPATCH` / `REPORT`), producing hard-to-handle or unsafe path names.
-- Affected code:
-  - `internal/server/handler.go` (`validateRequestPathPayload`)
-- Root cause:
-  - Validation rejects separators/traversal, but not ASCII control characters.
-- Suggested fix:
-  - Reject decoded path segments containing control bytes (`< 0x20` or `0x7f`).
-- Tests to add:
-  - `%00`, `%09`, `%0A`, `%0D`, `%7F` path segment payloads rejected with `400`.
-
 ### FIXME-008 (P1) `sync-collection` token can fail to advance under concurrent writes (token-window race)
 
 - Status: validated as plausible by code inspection (TODO includes reproducible evidence; repro not re-run in this review)
@@ -99,22 +72,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 - Tests to add:
   - Repeated failed auth attempts trigger throttle behavior (without breaking valid auth semantics)
   - Throttle keying behavior documented and tested (direct remote vs trusted proxy mode)
-
-### FIXME-010 (P2) Unauthenticated path-validation oracle (`400` before `401`)
-
-- Status: validated (code inspection)
-- Impact: Invalid encoded-path payloads get `400` without auth challenge, while valid protected paths get `401` with challenge. This leaks path-validation behavior pre-auth.
-- Affected code:
-  - `internal/server/handler.go` (`serveHTTP`)
-- Root cause:
-  - `validateRequestPathPayload` runs before `requireBasicAuth`.
-- Revalidated evidence (from TODO):
-  - no-auth valid protected path -> `401` + `WWW-Authenticate`
-  - no-auth invalid encoded path payload (e.g. `%2F`) -> `400` without challenge
-- Suggested fix:
-  - Run auth challenge before path validation for protected routes, or normalize unauthenticated failures to the same `401` + challenge behavior.
-- Tests to add:
-  - No-auth invalid protected path returns the same auth challenge behavior as a valid protected path.
 
 ### FIXME-023 (P1) Background prune can invalidate freshly issued `sync-collection` continuation tokens mid-pagination
 
@@ -238,6 +195,9 @@ These findings were verified fixed in the current tree and should be deleted fro
 - Duplicate `Authorization` header ambiguity (duplicate/comma-combined headers rejected) (fixed in `9f6e261`)
 - Oversized Basic `Authorization` header rejection (`431`) (fixed in `3d076c5`)
 - HTTP server timeout defaults (`ReadHeaderTimeout`/`ReadTimeout`/`WriteTimeout`/`IdleTimeout`) (fixed in `cb4f34e`)
+- Unauthenticated protected-path auth challenge before path validation (`401` vs `400` oracle) (fixed in `9e00528`)
+- Control-character rejection in path segments (fixed in `b4c80fd`)
+- Strict trailing XML content rejection for `REPORT` / `PROPPATCH` (fixed in `0b2c940`)
 - `Store.PragmaString` / `Store.PragmaInt` PRAGMA-name validation (fixed in `48d0b25`)
 - `contactctl import` honors `CONTACTD_VCARD_MAX_BYTES` (fixed in `7344b19`)
 - `contactctl export --format concat` seam normalization (fixed in `9a12b6c`)
