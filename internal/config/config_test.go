@@ -275,3 +275,47 @@ func TestLoadServeConfig_InvalidBaseURLAndPruneIntervalRejected(t *testing.T) {
 		t.Fatal("LoadServeConfig invalid prune interval error=nil, want error")
 	}
 }
+
+func TestLoadServeConfig_AuthMaxConcurrency_EnvAndFlagPriority(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.LoadServeConfig([]string{"--auth-max-concurrency", "7"}, map[string]string{
+		"CONTACTD_AUTH_MAX_CONCURRENCY": "3",
+	})
+	if err != nil {
+		t.Fatalf("LoadServeConfig returned error: %v", err)
+	}
+	if got, want := cfg.AuthMaxConcurrency, 7; got != want {
+		t.Fatalf("AuthMaxConcurrency=%d want %d", got, want)
+	}
+
+	cfg, err = config.LoadServeConfig(nil, map[string]string{
+		"CONTACTD_AUTH_MAX_CONCURRENCY": "5",
+	})
+	if err != nil {
+		t.Fatalf("LoadServeConfig env returned error: %v", err)
+	}
+	if got, want := cfg.AuthMaxConcurrency, 5; got != want {
+		t.Fatalf("AuthMaxConcurrency=%d want %d", got, want)
+	}
+}
+
+func TestLoadServeConfig_InvalidAuthMaxConcurrencyRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  map[string]string
+	}{
+		{name: "env negative", env: map[string]string{"CONTACTD_AUTH_MAX_CONCURRENCY": "-1"}},
+		{name: "flag negative", args: []string{"--auth-max-concurrency", "-1"}, env: map[string]string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := config.LoadServeConfig(tc.args, tc.env); err == nil {
+				t.Fatal("LoadServeConfig error=nil, want invalid auth max concurrency")
+			}
+		})
+	}
+}

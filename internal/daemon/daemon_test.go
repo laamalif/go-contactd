@@ -11,7 +11,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -212,6 +214,97 @@ func TestNewHTTPServer_ConfiguresTimeouts(t *testing.T) {
 	}
 	if got, want := srv.IdleTimeout, 120*time.Second; got != want {
 		t.Fatalf("IdleTimeout = %v, want %v", got, want)
+	}
+}
+
+func TestWrapAuthenticateWithConcurrencyCap_LimitsParallelCalls(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	started := make(chan struct{}, 8)
+	var inFlight int32
+	var maxInFlight int32
+
+	next := func(ctx context.Context, username, password string) (string, bool, error) {
+		cur := atomic.AddInt32(&inFlight, 1)
+		for {
+			prev := atomic.LoadInt32(&maxInFlight)
+			if cur <= prev || atomic.CompareAndSwapInt32(&maxInFlight, prev, cur) {
+				break
+			}
+		}
+		started <- struct{}{}
+		<-release
+		atomic.AddInt32(&inFlight, -1)
+		return username, true, nil
+	}
+	auth := wrapAuthenticateWithConcurrencyCap(2, next)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			user := "u" + strconv.Itoa(i)
+			if _, ok, err := auth(context.Background(), user, "pw"); err != nil || !ok {
+				t.Errorf("auth(%s) err=%v ok=%v", user, err, ok)
+			}
+		}(i)
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for first two auth calls to start")
+		}
+	}
+	if got, want := atomic.LoadInt32(&maxInFlight), int32(2); got != want {
+		t.Fatalf("maxInFlight=%d want %d", got, want)
+	}
+	if got := len(started); got != 0 {
+		t.Fatalf("unexpected extra started calls before release: %d", got)
+	}
+
+	for i := 0; i < 4; i++ {
+		release <- struct{}{}
+	}
+	wg.Wait()
+}
+
+func TestWrapAuthenticateWithConcurrencyCap_ContextCancelWhileWaiting(t *testing.T) {
+	t.Parallel()
+
+	block := make(chan struct{})
+	next := func(ctx context.Context, username, password string) (string, bool, error) {
+		<-block
+		return username, true, nil
+	}
+	auth := wrapAuthenticateWithConcurrencyCap(1, next)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _ = auth(context.Background(), "holder", "pw")
+	}()
+	// Give first call a moment to acquire the slot.
+	time.Sleep(20 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, ok, err := auth(ctx, "waiter", "pw")
+	if err == nil {
+		t.Fatal("err=nil, want context cancellation error")
+	}
+	if ok {
+		t.Fatal("ok=true, want false on canceled wait")
+	}
+
+	close(block)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked auth call did not complete")
 	}
 }
 

@@ -276,7 +276,7 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 		RequestMaxBytes:        cfg.RequestMaxBytes,
 		VCardMaxBytes:          cfg.VCardMaxBytes,
 		AttachPrincipal:        contactcarddav.WithPrincipal,
-		Authenticate: func(ctx context.Context, username, password string) (string, bool, error) {
+		Authenticate: wrapAuthenticateWithConcurrencyCap(cfg.AuthMaxConcurrency, func(ctx context.Context, username, password string) (string, bool, error) {
 			ok, _, err := store.AuthenticateUser(ctx, username, password)
 			if err != nil {
 				return "", false, err
@@ -285,7 +285,7 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 				return "", false, nil
 			}
 			return username, true, nil
-		},
+		}),
 	})
 
 	return &serveRuntime{
@@ -294,6 +294,22 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 		handler: h,
 		logger:  logger,
 	}, nil
+}
+
+func wrapAuthenticateWithConcurrencyCap(limit int, next func(context.Context, string, string) (string, bool, error)) func(context.Context, string, string) (string, bool, error) {
+	if limit <= 0 || next == nil {
+		return next
+	}
+	sem := make(chan struct{}, limit)
+	return func(ctx context.Context, username, password string) (string, bool, error) {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return "", false, ctx.Err()
+		}
+		defer func() { <-sem }()
+		return next(ctx, username, password)
+	}
 }
 
 func newServeLogger(format, level string, out io.Writer) *slog.Logger {

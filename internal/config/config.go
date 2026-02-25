@@ -12,16 +12,17 @@ import (
 )
 
 const (
-	defaultListenAddr      = ":8080"
-	defaultDBPath          = "/var/db/contactd.db"
-	defaultLogLevel        = "info"
-	defaultLogFormat       = "text"
-	defaultRequestMaxBytes = int64(10 << 20) // 10 MiB
-	defaultVCardMaxBytes   = int64(10 << 20) // 10 MiB
-	defaultBookSlug        = "contacts"
-	defaultBookName        = "Contacts"
-	defaultRetentionDays   = 180
-	defaultPruneInterval   = 24 * time.Hour
+	defaultListenAddr         = ":8080"
+	defaultDBPath             = "/var/db/contactd.db"
+	defaultLogLevel           = "info"
+	defaultLogFormat          = "text"
+	defaultRequestMaxBytes    = int64(10 << 20) // 10 MiB
+	defaultVCardMaxBytes      = int64(10 << 20) // 10 MiB
+	defaultBookSlug           = "contacts"
+	defaultBookName           = "Contacts"
+	defaultRetentionDays      = 180
+	defaultPruneInterval      = 24 * time.Hour
+	defaultAuthMaxConcurrency = 8
 )
 
 const DefaultDBPath = defaultDBPath
@@ -48,6 +49,7 @@ type ServeConfig struct {
 	ChangeRetentionMaxRevisions int64
 	PruneInterval               time.Duration
 	EnableAddressbookColor      bool
+	AuthMaxConcurrency          int
 	Users                       []SeedUser
 }
 
@@ -63,6 +65,7 @@ func LoadServeConfig(args []string, env map[string]string) (ServeConfig, error) 
 		DefaultBookName:     defaultBookName,
 		ChangeRetentionDays: defaultRetentionDays,
 		PruneInterval:       defaultPruneInterval,
+		AuthMaxConcurrency:  defaultAuthMaxConcurrency,
 	}
 
 	applyEnv(&cfg, env)
@@ -145,6 +148,11 @@ func applyEnv(cfg *ServeConfig, env map[string]string) {
 			cfg.EnableAddressbookColor = b
 		}
 	}
+	if v, ok := env["CONTACTD_AUTH_MAX_CONCURRENCY"]; ok && strings.TrimSpace(v) != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			cfg.AuthMaxConcurrency = n
+		}
+	}
 }
 
 func parseFlags(cfg *ServeConfig, args []string) error {
@@ -169,6 +177,7 @@ func parseFlags(cfg *ServeConfig, args []string) error {
 	fs.Int64Var(&cfg.ChangeRetentionMaxRevisions, "change-retention-max-revisions", cfg.ChangeRetentionMaxRevisions, "keep latest N revisions per addressbook (0 disables)")
 	fs.DurationVar(&cfg.PruneInterval, "prune-interval", cfg.PruneInterval, "background prune interval (0 disables)")
 	fs.BoolVar(&cfg.EnableAddressbookColor, "enable-addressbook-color", cfg.EnableAddressbookColor, "enable INF:addressbook-color PROPPATCH/PROPFIND support")
+	fs.IntVar(&cfg.AuthMaxConcurrency, "auth-max-concurrency", cfg.AuthMaxConcurrency, "max concurrent auth checks (0 disables cap)")
 	fs.IntVar(&port, "port", 0, "convenience: listen on :PORT (cannot combine with --listen-addr)")
 	fs.IntVar(&port, "p", 0, "alias for --port")
 
@@ -243,6 +252,9 @@ func validateServeConfig(cfg ServeConfig) error {
 	}
 	if cfg.PruneInterval < 0 {
 		return fmt.Errorf("prune interval must be >= 0")
+	}
+	if cfg.AuthMaxConcurrency < 0 {
+		return fmt.Errorf("auth max concurrency must be >= 0")
 	}
 
 	return nil
