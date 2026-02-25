@@ -511,40 +511,158 @@ func (h *handler) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, h.opts.RequestMaxBytes)
-	var envelope struct {
-		XMLName   xml.Name
-		Hrefs     []string `xml:"href"`
-		SyncToken string   `xml:"sync-token"`
-		Limit     *struct {
-			NResults int `xml:"nresults"`
-		} `xml:"limit"`
-	}
-	if err := xml.NewDecoder(r.Body).Decode(&envelope); err != nil {
+	req, err := parseReportRequest(r.Body)
+	if err != nil {
+		if errors.Is(err, errUnknownReportType) {
+			http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
+			return
+		}
 		_ = writeInvalidBodyOrTooLarge(w, err, "invalid xml")
 		return
 	}
 
-	switch envelope.XMLName.Local {
-	case "addressbook-multiget":
-		h.handleAddressbookMultiGet(w, r, envelope.Hrefs)
+	switch req.Kind {
+	case reportKindAddressbookMultiGet:
+		h.handleAddressbookMultiGet(w, r, req.Hrefs)
 		return
-	case "addressbook-query":
+	case reportKindAddressbookQuery:
 		h.handleAddressbookQuery(w, r)
 		return
-	case "sync-collection":
+	case reportKindSyncCollection:
 		limit := syncServerPageLimit
-		if envelope.Limit != nil && envelope.Limit.NResults > 0 {
-			limit = envelope.Limit.NResults
+		if req.LimitNResults > 0 {
+			limit = req.LimitNResults
 			if limit > syncServerPageLimit {
 				limit = syncServerPageLimit
 			}
 		}
-		h.handleSyncCollection(w, r, envelope.SyncToken, limit)
+		h.handleSyncCollection(w, r, req.SyncToken, limit)
 		return
 	default:
 		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
 		return
 	}
+}
+
+type reportKind int
+
+const (
+	reportKindUnknown reportKind = iota
+	reportKindAddressbookMultiGet
+	reportKindAddressbookQuery
+	reportKindSyncCollection
+)
+
+type reportRequest struct {
+	Kind          reportKind
+	Hrefs         []string
+	SyncToken     string
+	LimitNResults int
+}
+
+var errUnknownReportType = errors.New("unknown report type")
+
+func parseReportRequest(body io.Reader) (reportRequest, error) {
+	dec := xml.NewDecoder(body)
+	var req reportRequest
+	rootSeen := false
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return reportRequest{}, err
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if !rootSeen {
+			rootSeen = true
+			switch {
+			case matchXMLName(start.Name, xml.Name{Space: davxml.NamespaceCardDAV, Local: "addressbook-multiget"}):
+				req.Kind = reportKindAddressbookMultiGet
+			case matchXMLName(start.Name, xml.Name{Space: davxml.NamespaceCardDAV, Local: "addressbook-query"}):
+				req.Kind = reportKindAddressbookQuery
+			case matchXMLName(start.Name, xml.Name{Space: davxml.NamespaceDAV, Local: "sync-collection"}):
+				req.Kind = reportKindSyncCollection
+			default:
+				return reportRequest{}, errUnknownReportType
+			}
+			continue
+		}
+
+		switch req.Kind {
+		case reportKindAddressbookMultiGet:
+			if matchXMLName(start.Name, xml.Name{Space: davxml.NamespaceDAV, Local: "href"}) {
+				var href string
+				if err := dec.DecodeElement(&href, &start); err != nil {
+					return reportRequest{}, err
+				}
+				req.Hrefs = append(req.Hrefs, strings.TrimSpace(href))
+			}
+		case reportKindSyncCollection:
+			switch {
+			case matchXMLName(start.Name, xml.Name{Space: davxml.NamespaceDAV, Local: "sync-token"}):
+				var token string
+				if err := dec.DecodeElement(&token, &start); err != nil {
+					return reportRequest{}, err
+				}
+				req.SyncToken = strings.TrimSpace(token)
+			case matchXMLName(start.Name, xml.Name{Space: davxml.NamespaceDAV, Local: "limit"}):
+				n, err := parseDAVLimitNResults(dec, start)
+				if err != nil {
+					return reportRequest{}, err
+				}
+				req.LimitNResults = n
+			}
+		}
+	}
+	if !rootSeen {
+		return reportRequest{}, fmt.Errorf("empty body")
+	}
+	return req, nil
+}
+
+func parseDAVLimitNResults(dec *xml.Decoder, start xml.StartElement) (int, error) {
+	depth := 1
+	nresults := 0
+	for depth > 0 {
+		tok, err := dec.Token()
+		if err != nil {
+			return 0, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if depth == 1 && matchXMLName(t.Name, xml.Name{Space: davxml.NamespaceDAV, Local: "nresults"}) {
+				var v string
+				if err := dec.DecodeElement(&v, &t); err != nil {
+					return 0, err
+				}
+				v = strings.TrimSpace(v)
+				if v == "" {
+					continue
+				}
+				n, err := strconv.Atoi(v)
+				if err != nil {
+					return 0, err
+				}
+				nresults = n
+				continue
+			}
+			depth++
+		case xml.EndElement:
+			if matchXMLName(t.Name, start.Name) {
+				depth--
+				continue
+			}
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return nresults, nil
 }
 
 func (h *handler) handleMkcol(w http.ResponseWriter, r *http.Request) {

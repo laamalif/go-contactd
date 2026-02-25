@@ -2913,6 +2913,73 @@ func TestHandler_Report_AddressbookMultiget_ReturnsSubsetAnd404(t *testing.T) {
 	}
 }
 
+func TestHandler_Report_AddressbookMultiget_WrongNamespaceRootRejected(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<X:addressbook-multiget xmlns:X="urn:not-carddav" xmlns:D="DAV:">
+  <D:href>/alice/contacts/a.vcf</D:href>
+</X:addressbook-multiget>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusNotImplemented; got != want {
+		t.Fatalf("status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+}
+
+func TestHandler_Report_AddressbookMultiget_WrongNamespaceHrefIgnored(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject a: %v", err)
+	}
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:addressbook-multiget xmlns:C="urn:ietf:params:xml:ns:carddav" xmlns:X="urn:not-dav">
+  <X:href>/alice/contacts/a.vcf</X:href>
+</C:addressbook-multiget>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "/alice/contacts/a.vcf") {
+		t.Fatalf("body unexpectedly contains leaked href: %q", rr.Body.String())
+	}
+}
+
 func TestHandler_Report_AddressbookQuery_ReturnsCardsWithAddressData(t *testing.T) {
 	t.Parallel()
 
@@ -2981,6 +3048,53 @@ func TestHandler_Report_AddressbookQuery_ReturnsCardsWithAddressData(t *testing.
 		if !strings.Contains(resp.PropStat[0].Prop.AddressData, "BEGIN:VCARD") {
 			t.Fatalf("response[%d] missing address-data: %+v", i, resp)
 		}
+	}
+}
+
+func TestHandler_Report_SyncCollection_WrongNamespaceLimitIgnored(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject a: %v", err)
+	}
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/b.vcf", mustSampleCard("uid-b", "Alice B"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject b: %v", err)
+	}
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:sync-collection xmlns:D="DAV:" xmlns:X="urn:not-dav">
+  <D:sync-token></D:sync-token>
+  <D:sync-level>1</D:sync-level>
+  <X:limit><X:nresults>1</X:nresults></X:limit>
+</D:sync-collection>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	// Wrong-namespace limit must not trigger truncation/self 507.
+	if strings.Contains(rr.Body.String(), "507 Insufficient Storage") {
+		t.Fatalf("body unexpectedly truncated by wrong-namespace limit: %q", rr.Body.String())
+	}
+	// Both cards should be present in initial full sync.
+	if !strings.Contains(rr.Body.String(), "/alice/contacts/a.vcf") || !strings.Contains(rr.Body.String(), "/alice/contacts/b.vcf") {
+		t.Fatalf("body missing expected cards: %q", rr.Body.String())
 	}
 }
 
