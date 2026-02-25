@@ -501,6 +501,9 @@ func parseProppatchRequest(body io.Reader) (proppatchRequest, error) {
 	if len(req.Ops) == 0 {
 		return proppatchRequest{}, fmt.Errorf("no properties")
 	}
+	if err := validateSingleXMLDocument(raw); err != nil {
+		return proppatchRequest{}, err
+	}
 	return req, nil
 }
 
@@ -563,7 +566,17 @@ type reportRequest struct {
 var errUnknownReportType = errors.New("unknown report type")
 
 func parseReportRequest(body io.Reader) (reportRequest, error) {
-	dec := xml.NewDecoder(body)
+	if body == nil {
+		return reportRequest{}, fmt.Errorf("empty body")
+	}
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return reportRequest{}, err
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return reportRequest{}, fmt.Errorf("empty body")
+	}
+	dec := xml.NewDecoder(bytes.NewReader(raw))
 	var req reportRequest
 	rootSeen := false
 	for {
@@ -622,7 +635,50 @@ func parseReportRequest(body io.Reader) (reportRequest, error) {
 	if !rootSeen {
 		return reportRequest{}, fmt.Errorf("empty body")
 	}
+	if err := validateSingleXMLDocument(raw); err != nil {
+		return reportRequest{}, err
+	}
 	return req, nil
+}
+
+func validateSingleXMLDocument(raw []byte) error {
+	dec := xml.NewDecoder(bytes.NewReader(raw))
+	var (
+		rootSeen   bool
+		rootClosed bool
+		depth      int
+	)
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if depth == 0 {
+				if rootSeen && rootClosed {
+					return fmt.Errorf("trailing xml content")
+				}
+				rootSeen = true
+			}
+			depth++
+		case xml.EndElement:
+			if depth > 0 {
+				depth--
+				if depth == 0 && rootSeen {
+					rootClosed = true
+				}
+			}
+		case xml.CharData:
+			if depth == 0 && len(bytes.TrimSpace([]byte(t))) > 0 {
+				return fmt.Errorf("trailing xml content")
+			}
+		}
+	}
+	return nil
 }
 
 func parseDAVLimitNResults(dec *xml.Decoder, start xml.StartElement) (int, error) {

@@ -2543,6 +2543,37 @@ func TestHandler_Proppatch_InvalidXML_Returns400(t *testing.T) {
 	}
 }
 
+func TestHandler_Proppatch_TrailingXMLContentRejected(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><D:displayname>Trailing</D:displayname></D:prop></D:set></D:propertyupdate><X:evil xmlns:X="urn:x"/>`
+	req := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("PROPPATCH trailing xml status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+}
+
 func TestHandler_Proppatch_AddressbookMetadata_PersistsAndPropfindExposes(t *testing.T) {
 	t.Parallel()
 
@@ -2876,6 +2907,34 @@ func TestHandler_Report_MalformedOversizeBodyReturns413(t *testing.T) {
 	}
 	if body, want := rr.Body.String(), http.StatusText(http.StatusRequestEntityTooLarge)+"\n"; body != want {
 		t.Fatalf("REPORT malformed oversize body = %q, want %q", body, want)
+	}
+}
+
+func TestHandler_Report_TrailingXMLContentRejected(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+
+	body := `<?xml version="1.0" encoding="utf-8"?>
+<D:sync-collection xmlns:D="DAV:"><D:sync-token></D:sync-token><D:sync-level>1</D:sync-level></D:sync-collection><X:evil xmlns:X="urn:x"/>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(body))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("REPORT trailing xml status = %d, want %d body=%q", got, want, rr.Body.String())
 	}
 }
 
