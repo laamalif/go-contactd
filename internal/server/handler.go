@@ -1676,10 +1676,24 @@ func parseCardPath(p string) (user, slug, href string, ok bool) {
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return "", "", "", false
 	}
+	for _, part := range parts {
+		if hasASCIIControl(part) {
+			return "", "", "", false
+		}
+	}
 	if strings.HasSuffix(pathValue, "/") {
 		return "", "", "", false
 	}
 	return parts[0], parts[1], parts[2], true
+}
+
+func hasASCIIControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func isMaxBytesError(err error) bool {
@@ -1721,10 +1735,8 @@ func validateRequestPathPayload(u *url.URL) error {
 		if strings.Contains(decoded, "/") || strings.Contains(decoded, `\`) {
 			return fmt.Errorf("path separator in segment")
 		}
-		for i := 0; i < len(decoded); i++ {
-			if decoded[i] < 0x20 || decoded[i] == 0x7f {
-				return fmt.Errorf("control character in segment")
-			}
+		if hasASCIIControl(decoded) {
+			return fmt.Errorf("control character in segment")
 		}
 	}
 	return nil

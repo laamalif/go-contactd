@@ -48,3 +48,19 @@ func TestRequestRemoteForLog_DirectSocketReturnsHostOnly(t *testing.T) {
 		t.Fatalf("requestRemoteForLog(trust=false) = %q, want %q", got, want)
 	}
 }
+
+func TestParseCardPath_RejectsControlChars(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []string{
+		"/alice/contacts/card%00.vcf",
+		"/alice/contacts/card%09.vcf",
+		"/alice/contacts/card%0A.vcf",
+		"/alice/contacts/card%0D.vcf",
+		"/alice/contacts/card%7F.vcf",
+	} {
+		if _, _, _, ok := parseCardPath(tc); ok {
+			t.Fatalf("parseCardPath(%q) ok=true, want false", tc)
+		}
+	}
+}

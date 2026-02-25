@@ -3326,6 +3326,42 @@ func TestHandler_Report_AddressbookMultiget_TooManyHrefsRejected(t *testing.T) {
 	}
 }
 
+func TestHandler_Report_AddressbookMultiget_HrefControlCharsSafe404(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:addressbook-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:href>/alice/contacts/card%00.vcf</D:href>
+</C:addressbook-multiget>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	if strings.ContainsRune(rr.Body.String(), '\x00') {
+		t.Fatalf("body contains NUL: %q", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "404 Not Found") {
+		t.Fatalf("body=%q want per-item 404", rr.Body.String())
+	}
+}
+
 func TestHandler_Report_AddressbookQuery_ReturnsCardsWithAddressData(t *testing.T) {
 	t.Parallel()
 
