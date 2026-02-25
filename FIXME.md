@@ -89,33 +89,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - dir import regular-file content swap cannot alter imported bytes after snapshot/open (best-effort deterministic harness)
   - concat import from non-regular source is rejected (or bounded) deterministically
 
-### FIXME-020 (P1) `contactctl export --format dir` is vulnerable to hardlink/TOCTOU clobber in attacker-controlled output directory
-
-- Status: validated operationally (TODO includes reproducible hardlink race); current symlink fix does not cover hardlinks/replace races
-- Impact:
-  - An attacker with write access to the export directory can race and plant a hardlink at a predictable export filename, causing export to overwrite an external file via shared inode.
-  - An attacker can also replace a checked destination path with a FIFO between check and write, causing export to block/hang on write.
-  - This is a local filesystem integrity risk for admin exports into untrusted directories.
-- Affected code:
-  - `internal/ctl/ctl.go` (`writeDirExport`)
-- Root cause:
-  - Export writes directly to `out/<href>.vcf` with `os.WriteFile(...)` (in-place truncate/write).
-  - Current check rejects symlinks/non-regular files, but a hardlink is a regular file and passes the check.
-  - There is also a TOCTOU window between path check and `WriteFile`.
-- Revalidated evidence (from TODO):
-  - Predictable last-filename race planted `out/zzzzz.vcf -> target.txt` (hardlink) before final write.
-  - Export succeeded and external target was overwritten (`target_head=BEGIN:VCARD`, `target_nlink=2`).
-  - FIFO replacement race on a predictable later filename caused export hang/timeout (`export_rc=124`), leaving a FIFO in the output dir.
-- Suggested fix:
-  - Avoid in-place writes to final path in directory export.
-  - Write to a temp file in the export directory and `rename` into place (rename replaces the directory entry, avoiding hardlink-target clobber).
-  - Revalidate destination path semantics around rename if overwrite behavior is retained.
-  - Consider an option to refuse overwriting existing files entirely (safer backup mode).
-- Tests to add:
-  - hardlink destination race/clobber regression (best-effort deterministic harness or unit-level helper test)
-  - FIFO replacement race does not hang export (best-effort deterministic harness)
-  - normal dir export still works with temp+rename strategy
-
 ### FIXME-022 (P2) `contactctl import --dry-run` is non-snapshot and can diverge materially from immediate real import under concurrent writers
 
 - Status: validated conceptually and by TODO repro evidence; current-tree root cause corrected
@@ -161,6 +134,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - `contactctl import` honors `CONTACTD_VCARD_MAX_BYTES` (fixed in `7344b19`)
 - `contactctl export --format concat` seam normalization (fixed in `9a12b6c`)
 - `sync-collection` token non-advancing race under concurrent writes (fixed in `ae7d895`)
+- `contactctl export --format dir` hardlink/TOCTOU clobber in attacker-controlled output directory (fixed in `1315505`)
 - `sync-collection` delta per-href collapse (duplicates / contradictory states) (fixed in `d97e4c8`)
 - Full `sync-collection` bootstrap includes live cards after journal prune (fixed in `213697e`)
 - `sync-collection` continuation pages remain valid across prune (fixed in `fe65dde`)
