@@ -3075,6 +3075,80 @@ func TestHandler_Report_AddressbookMultiget_InvalidTargetPathReturns404(t *testi
 	}
 }
 
+func TestHandler_Report_AddressbookMultiget_DedupesDuplicateHrefs(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject a: %v", err)
+	}
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:addressbook-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:href>/alice/contacts/a.vcf</D:href>
+  <D:href>/alice/contacts/a.vcf</D:href>
+</C:addressbook-multiget>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	if got := strings.Count(rr.Body.String(), "<href>/alice/contacts/a.vcf</href>"); got != 1 {
+		t.Fatalf("href count = %d, want 1 body=%q", got, rr.Body.String())
+	}
+}
+
+func TestHandler_Report_AddressbookMultiget_TooManyHrefsRejected(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="utf-8"?><C:addressbook-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">`)
+	for i := 0; i < 1001; i++ {
+		b.WriteString(`<D:href>/alice/contacts/a.vcf</D:href>`)
+	}
+	b.WriteString(`</C:addressbook-multiget>`)
+
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", strings.NewReader(b.String()))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "too many hrefs") {
+		t.Fatalf("body=%q want too many hrefs", rr.Body.String())
+	}
+}
+
 func TestHandler_Report_AddressbookQuery_ReturnsCardsWithAddressData(t *testing.T) {
 	t.Parallel()
 

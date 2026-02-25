@@ -571,6 +571,28 @@ expect 207 "multiget with missing href"
 body_has "/alice/contacts/does-not-exist.vcf" "missing href has response entry"
 body_has "404" "missing href returns 404 status"
 
+# 7d. Duplicate hrefs should be deduped (anti-amplification)
+dav REPORT "/alice/contacts/" \
+  -H "Content-Type: application/xml; charset=utf-8" \
+  --data-binary "$(multiget_xml \
+    "/alice/contacts/alice-contact.vcf" \
+    "/alice/contacts/alice-contact.vcf")"
+expect 207 "multiget duplicate hrefs"
+[[ "$(count_in_body "<href>/alice/contacts/alice-contact.vcf</href>")" == "1" ]] \
+  || fail "duplicate multiget href was not deduped"
+ok "multiget duplicate href deduped"
+
+# 7e. Too many hrefs should be rejected (anti-fan-out)
+multiget_hrefs=""
+for _ in $(seq 1 1001); do
+  multiget_hrefs="${multiget_hrefs}<D:href>/alice/contacts/alice-contact.vcf</D:href>"
+done
+dav REPORT "/alice/contacts/" \
+  -H "Content-Type: application/xml; charset=utf-8" \
+  --data-binary "<?xml version=\"1.0\" encoding=\"utf-8\"?><C:addressbook-multiget xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\">${multiget_hrefs}</C:addressbook-multiget>"
+expect 400 "multiget href cap"
+body_has "too many hrefs" "multiget href cap error"
+
 # ═════════════════════════════════════════════════════════════════════════════
 # PHASE 8: Contact Update — conditional PUT (SyncManager.kt)
 # ═════════════════════════════════════════════════════════════════════════════

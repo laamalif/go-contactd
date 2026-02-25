@@ -160,6 +160,28 @@ resp="$(curl -sS -i -u alice:secret "${BASE_URL}/alice/contacts/a.vcf")"
 expect_status 200 "${resp}"
 assert_contains "UID:uid-a" "${resp}"
 
+log "multiget duplicate hrefs must be deduped"
+resp="$(curl -sS -i -u alice:secret -X REPORT \
+  -H 'Content-Type: application/xml; charset=utf-8' \
+  --data-binary '<?xml version="1.0" encoding="utf-8"?><C:addressbook-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav"><D:href>/alice/contacts/a.vcf</D:href><D:href>/alice/contacts/a.vcf</D:href></C:addressbook-multiget>' \
+  "${BASE_URL}/alice/contacts/")"
+expect_status 207 "${resp}"
+if [[ "$(printf '%s' "${resp}" | grep -o '<href>/alice/contacts/a.vcf</href>' | wc -l | tr -d ' ')" != "1" ]]; then
+  fail "duplicate multiget href was not deduped: ${resp}"
+fi
+
+log "multiget too many hrefs must be rejected"
+MULTIGET_HREFS=''
+for _ in $(seq 1 1001); do
+  MULTIGET_HREFS="${MULTIGET_HREFS}<D:href>/alice/contacts/a.vcf</D:href>"
+done
+resp="$(curl -sS -i -u alice:secret -X REPORT \
+  -H 'Content-Type: application/xml; charset=utf-8' \
+  --data-binary "<?xml version=\"1.0\" encoding=\"utf-8\"?><C:addressbook-multiget xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\">${MULTIGET_HREFS}</C:addressbook-multiget>" \
+  "${BASE_URL}/alice/contacts/")"
+expect_status 400 "${resp}"
+assert_contains "too many hrefs" "${resp}"
+
 log "initial sync-collection"
 resp="$(curl -sS -i -u alice:secret -X REPORT \
   -H 'Content-Type: application/xml; charset=utf-8' \

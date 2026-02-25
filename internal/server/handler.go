@@ -41,6 +41,7 @@ type HandlerOptions struct {
 
 const syncServerPageLimit = 500
 const maxAuthorizationHeaderBytes = 8192
+const maxReportMultigetHrefs = 1000
 
 func NewHandler(opts HandlerOptions) http.Handler {
 	if opts.Logger == nil {
@@ -951,6 +952,10 @@ func (h *handler) handleAddressbookDelete(w http.ResponseWriter, r *http.Request
 }
 
 func (h *handler) handleAddressbookMultiGet(w http.ResponseWriter, r *http.Request, hrefs []string) {
+	if len(hrefs) > maxReportMultigetHrefs {
+		http.Error(w, "too many hrefs", http.StatusBadRequest)
+		return
+	}
 	targetUser, targetSlug, ok := parseAddressbookPath(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
@@ -962,8 +967,9 @@ func (h *handler) handleAddressbookMultiGet(w http.ResponseWriter, r *http.Reque
 	}
 
 	responses := make([]davxml.Response, 0, len(hrefs))
+	seen := make(map[string]struct{}, len(hrefs))
 	for _, href := range hrefs {
-		user, slug, _, ok := parseCardPath(href)
+		user, slug, name, ok := parseCardPath(href)
 		if !ok || user != targetUser || slug != targetSlug {
 			responses = append(responses, davxml.Response{
 				Href:   href,
@@ -971,11 +977,17 @@ func (h *handler) handleAddressbookMultiGet(w http.ResponseWriter, r *http.Reque
 			})
 			continue
 		}
-		ao, err := h.opts.Backend.GetAddressObject(r.Context(), href, nil)
+		canonicalHref := "/" + user + "/" + slug + "/" + name
+		if _, dup := seen[canonicalHref]; dup {
+			continue
+		}
+		seen[canonicalHref] = struct{}{}
+
+		ao, err := h.opts.Backend.GetAddressObject(r.Context(), canonicalHref, nil)
 		if err != nil {
 			if status, ok := httpStatusFromError(err); ok && status == http.StatusNotFound {
 				responses = append(responses, davxml.Response{
-					Href:   href,
+					Href:   canonicalHref,
 					Status: davxml.StatusLine(http.StatusNotFound),
 				})
 				continue
@@ -989,6 +1001,7 @@ func (h *handler) handleAddressbookMultiGet(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "invalid vcard", http.StatusInternalServerError)
 			return
 		}
+		resp.Href = canonicalHref
 		responses = append(responses, resp)
 	}
 
