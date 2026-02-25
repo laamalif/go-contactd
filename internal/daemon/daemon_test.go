@@ -308,6 +308,73 @@ func TestWrapAuthenticateWithConcurrencyCap_ContextCancelWhileWaiting(t *testing
 	}
 }
 
+func TestWrapAuthenticateWithFailureDelay_DelaysFailedAuth(t *testing.T) {
+	t.Parallel()
+
+	delay := 40 * time.Millisecond
+	auth := wrapAuthenticateWithFailureDelay(delay, func(ctx context.Context, username, password string) (string, bool, error) {
+		return "", false, nil
+	})
+
+	start := time.Now()
+	_, ok, err := auth(context.Background(), "alice", "wrong")
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("auth error: %v", err)
+	}
+	if ok {
+		t.Fatal("ok=true, want failed auth")
+	}
+	if elapsed < 30*time.Millisecond {
+		t.Fatalf("failed auth delay too short: %v", elapsed)
+	}
+}
+
+func TestWrapAuthenticateWithFailureDelay_DoesNotDelaySuccessfulAuth(t *testing.T) {
+	t.Parallel()
+
+	delay := 200 * time.Millisecond
+	auth := wrapAuthenticateWithFailureDelay(delay, func(ctx context.Context, username, password string) (string, bool, error) {
+		return username, true, nil
+	})
+
+	start := time.Now()
+	user, ok, err := auth(context.Background(), "alice", "pw")
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("auth error: %v", err)
+	}
+	if !ok || user != "alice" {
+		t.Fatalf("auth result = (%q,%v), want (alice,true)", user, ok)
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Fatalf("successful auth unexpectedly delayed: %v", elapsed)
+	}
+}
+
+func TestWrapAuthenticateWithFailureDelay_ContextCancelDuringDelay(t *testing.T) {
+	t.Parallel()
+
+	auth := wrapAuthenticateWithFailureDelay(200*time.Millisecond, func(ctx context.Context, username, password string) (string, bool, error) {
+		return "", false, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
+
+	start := time.Now()
+	_, ok, err := auth(ctx, "alice", "wrong")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("err=nil, want context cancellation error")
+	}
+	if ok {
+		t.Fatal("ok=true, want false")
+	}
+	if elapsed > 150*time.Millisecond {
+		t.Fatalf("context-canceled auth delay returned too late: %v", elapsed)
+	}
+}
+
 func TestNewServeLogger_FormatAndLevel(t *testing.T) {
 	t.Parallel()
 
@@ -546,6 +613,7 @@ func TestLogServerStarting_TextMode_EmitsConfigBlock(t *testing.T) {
 		": config CONTACTD_PRUNE_INTERVAL=12h0m0s",
 		": config CONTACTD_ENABLE_ADDRESSBOOK_COLOR=true",
 		": config CONTACTD_AUTH_MAX_CONCURRENCY=3",
+		": config CONTACTD_AUTH_FAIL_DELAY=0s",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("startup config block missing %q in %q", want, out)
@@ -602,6 +670,7 @@ func TestLogServerStarting_JSONOmitsVerboseConfigSnapshot(t *testing.T) {
 		`"prune_interval":`,
 		`"enable_addressbook_color":`,
 		`"auth_max_concurrency":`,
+		`"auth_fail_delay":`,
 		`"msg":"config"`,
 		`"CONTACTD_`,
 	} {

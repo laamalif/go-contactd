@@ -50,6 +50,7 @@ type ServeConfig struct {
 	PruneInterval               time.Duration
 	EnableAddressbookColor      bool
 	AuthMaxConcurrency          int
+	AuthFailDelay               time.Duration
 	Users                       []SeedUser
 }
 
@@ -153,6 +154,11 @@ func applyEnv(cfg *ServeConfig, env map[string]string) {
 			cfg.AuthMaxConcurrency = n
 		}
 	}
+	if v, ok := env["CONTACTD_AUTH_FAIL_DELAY"]; ok && strings.TrimSpace(v) != "" {
+		if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil {
+			cfg.AuthFailDelay = d
+		}
+	}
 }
 
 func parseFlags(cfg *ServeConfig, args []string) error {
@@ -178,6 +184,7 @@ func parseFlags(cfg *ServeConfig, args []string) error {
 	fs.DurationVar(&cfg.PruneInterval, "prune-interval", cfg.PruneInterval, "background prune interval (0 disables)")
 	fs.BoolVar(&cfg.EnableAddressbookColor, "enable-addressbook-color", cfg.EnableAddressbookColor, "enable INF:addressbook-color PROPPATCH/PROPFIND support")
 	fs.IntVar(&cfg.AuthMaxConcurrency, "auth-max-concurrency", cfg.AuthMaxConcurrency, "max concurrent auth checks (0 disables cap)")
+	fs.DurationVar(&cfg.AuthFailDelay, "auth-fail-delay", cfg.AuthFailDelay, "delay failed auth responses (0 disables)")
 	fs.IntVar(&port, "port", 0, "convenience: listen on :PORT (cannot combine with --listen-addr)")
 	fs.IntVar(&port, "p", 0, "alias for --port")
 
@@ -255,6 +262,9 @@ func validateServeConfig(cfg ServeConfig) error {
 	}
 	if cfg.AuthMaxConcurrency < 0 {
 		return fmt.Errorf("auth max concurrency must be >= 0")
+	}
+	if cfg.AuthFailDelay < 0 {
+		return fmt.Errorf("auth fail delay must be >= 0")
 	}
 
 	return nil

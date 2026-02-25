@@ -3,6 +3,7 @@ package config_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/laamalif/go-contactd/internal/config"
 )
@@ -315,6 +316,50 @@ func TestLoadServeConfig_InvalidAuthMaxConcurrencyRejected(t *testing.T) {
 			t.Parallel()
 			if _, err := config.LoadServeConfig(tc.args, tc.env); err == nil {
 				t.Fatal("LoadServeConfig error=nil, want invalid auth max concurrency")
+			}
+		})
+	}
+}
+
+func TestLoadServeConfig_AuthFailDelay_EnvAndFlagPriority(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.LoadServeConfig([]string{"--auth-fail-delay", "250ms"}, map[string]string{
+		"CONTACTD_AUTH_FAIL_DELAY": "100ms",
+	})
+	if err != nil {
+		t.Fatalf("LoadServeConfig returned error: %v", err)
+	}
+	if got, want := cfg.AuthFailDelay, 250*time.Millisecond; got != want {
+		t.Fatalf("AuthFailDelay=%v want %v", got, want)
+	}
+
+	cfg, err = config.LoadServeConfig(nil, map[string]string{
+		"CONTACTD_AUTH_FAIL_DELAY": "75ms",
+	})
+	if err != nil {
+		t.Fatalf("LoadServeConfig env returned error: %v", err)
+	}
+	if got, want := cfg.AuthFailDelay, 75*time.Millisecond; got != want {
+		t.Fatalf("AuthFailDelay=%v want %v", got, want)
+	}
+}
+
+func TestLoadServeConfig_InvalidAuthFailDelayRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  map[string]string
+	}{
+		{name: "env negative", env: map[string]string{"CONTACTD_AUTH_FAIL_DELAY": "-1ms"}},
+		{name: "flag negative", args: []string{"--auth-fail-delay", "-1ms"}, env: map[string]string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := config.LoadServeConfig(tc.args, tc.env); err == nil {
+				t.Fatal("LoadServeConfig error=nil, want invalid auth fail delay")
 			}
 		})
 	}

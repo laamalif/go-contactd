@@ -127,6 +127,7 @@ func logServerStarting(logger *slog.Logger, cfg config.ServeConfig) {
 		{"CONTACTD_PRUNE_INTERVAL", cfg.PruneInterval},
 		{"CONTACTD_ENABLE_ADDRESSBOOK_COLOR", cfg.EnableAddressbookColor},
 		{"CONTACTD_AUTH_MAX_CONCURRENCY", cfg.AuthMaxConcurrency},
+		{"CONTACTD_AUTH_FAIL_DELAY", cfg.AuthFailDelay},
 	} {
 		logger.Info("config", "event", "config", kv.key, kv.val)
 	}
@@ -319,7 +320,7 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 		RequestMaxBytes:        cfg.RequestMaxBytes,
 		VCardMaxBytes:          cfg.VCardMaxBytes,
 		AttachPrincipal:        contactcarddav.WithPrincipal,
-		Authenticate: wrapAuthenticateWithConcurrencyCap(cfg.AuthMaxConcurrency, func(ctx context.Context, username, password string) (string, bool, error) {
+		Authenticate: wrapAuthenticateWithFailureDelay(cfg.AuthFailDelay, wrapAuthenticateWithConcurrencyCap(cfg.AuthMaxConcurrency, func(ctx context.Context, username, password string) (string, bool, error) {
 			ok, _, err := store.AuthenticateUser(ctx, username, password)
 			if err != nil {
 				return "", false, err
@@ -328,7 +329,7 @@ func prepareServeRuntime(ctx context.Context, args []string, env map[string]stri
 				return "", false, nil
 			}
 			return username, true, nil
-		}),
+		})),
 	})
 
 	return &serveRuntime{
@@ -352,6 +353,33 @@ func wrapAuthenticateWithConcurrencyCap(limit int, next func(context.Context, st
 		}
 		defer func() { <-sem }()
 		return next(ctx, username, password)
+	}
+}
+
+func wrapAuthenticateWithFailureDelay(delay time.Duration, next func(context.Context, string, string) (string, bool, error)) func(context.Context, string, string) (string, bool, error) {
+	if delay <= 0 || next == nil {
+		return next
+	}
+	return func(ctx context.Context, username, password string) (string, bool, error) {
+		user, ok, err := next(ctx, username, password)
+		if err != nil || ok {
+			return user, ok, err
+		}
+		timer := time.NewTimer(delay)
+		defer func() {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		}()
+		select {
+		case <-timer.C:
+			return user, ok, err
+		case <-ctx.Done():
+			return "", false, ctx.Err()
+		}
 	}
 }
 
