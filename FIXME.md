@@ -130,6 +130,29 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - deterministic cache growth test enforces max entries/items and eviction behavior
   - pagination still works for recent cursors after eviction pressure
 
+### FIXME-027 (P1) REPORT multistatus responses are fully marshaled in memory (authenticated response-amplification memory DoS)
+
+- Status: validated by code inspection and user repro evidence
+- Impact:
+  - A single authenticated `REPORT addressbook-query` / `addressbook-multiget` can force large in-memory response construction, significantly exceeding request size and causing high heap spikes.
+  - This can degrade or crash the daemon under repeated large-card queries even after href-count limits.
+- Affected code:
+  - `internal/server/handler.go` (`handleAddressbookMultiGet`, `handleAddressbookQuery`, `writeDAVMultiStatus`)
+- Root cause:
+  - Handler builds the full `[]davxml.Response`, then `writeDAVMultiStatus` calls `davxml.Marshal(davxml.MultiStatus{...})`, materializing the entire XML body as a single `[]byte` before writing.
+  - `address-data` payloads can be large, so response amplification multiplies memory use.
+- Revalidated evidence (from user repro):
+  - Single `REPORT addressbook-query` over `120` cards (~`280KB` each) returned ~`34MB` response body
+  - observed heap delta ~`65MB` during one request
+- Suggested fix:
+  - Add a response-size cap for REPORT paths (especially when returning `address-data`) and fail fast when estimated/actual output exceeds limit.
+  - Longer-term: stream multistatus XML instead of marshalling whole body at once.
+  - Consider paging/query limits for `addressbook-query` and `multiget` response payload volume.
+- Tests to add:
+  - deterministic REPORT payload-size cap test (query/multiget returns error when response would exceed cap)
+  - regression that normal small REPORT responses still pass
+  - optional benchmark/pprof guard for large `address-data` responses
+
 ## Already Fixed (remove from `TODO`)
 
 These findings were verified fixed in the current tree and should be deleted from `TODO`:
