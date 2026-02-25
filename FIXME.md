@@ -87,30 +87,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - concat import from non-regular source is rejected (or bounded) deterministically
   - concat import total-input cap is enforced on large regular files
 
-### FIXME-022 (P2) `contactctl import --dry-run` is non-snapshot and can diverge materially from immediate real import under concurrent writers
-
-- Status: validated conceptually and by TODO repro evidence; current-tree root cause corrected
-- Impact:
-  - `--dry-run` create/update counts (or success/failure expectation) can be wrong when the target addressbook changes concurrently between dry-run classification and the subsequent real import run.
-  - Operators may treat dry-run as a reliable preview, but it is advisory only under concurrency.
-- Affected code:
-  - `internal/ctl/ctl.go` (`applyImportedBatch`, dry-run path; `putOrClassifyImportedCard`)
-- Root cause (current tree):
-  - Dry-run classification uses live point-in-time reads (`GetCard`, `ListCards`) without snapshot isolation/locking across the batch.
-  - Real import is batch-atomic (`PutCardsAtomic`) now, so prior reports citing per-file commits are stale; divergence is due to concurrent mutation between runs, not partial writes by import itself.
-- Revalidated evidence (from TODO):
-  - Dry-run predicted `created=12001 updated=0`; concurrent writer changed outcome to either:
-    - import failure (`UNIQUE ... uid`) while external concurrent write persisted, or
-    - count drift (`created=12000 updated=1`) without import failure.
-- Suggested fix:
-  - At minimum, document `--dry-run` as advisory and non-snapshot under concurrent writers.
-  - Optional hardening:
-    - add a snapshot/lock mode for dry-run + import planning, or
-    - compare and report drift risk (best effort) before commit.
-- Tests to add:
-  - regression demonstrating dry-run drift under concurrent writer (if deterministic harness is maintainable)
-  - documentation/help test clarifying advisory semantics (if wording is codified)
-
 ## Already Fixed (remove from `TODO`)
 
 These findings were verified fixed in the current tree and should be deleted from `TODO`:
@@ -133,6 +109,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - `contactctl export --format concat` seam normalization (fixed in `9a12b6c`)
 - `sync-collection` token non-advancing race under concurrent writes (fixed in `ae7d895`)
 - `contactctl export --format dir` hardlink/TOCTOU clobber in attacker-controlled output directory (fixed in `1315505`)
+- `contactctl import --dry-run` advisory/non-snapshot semantics documented in help (fixed in `cdd08dd`)
 - `sync-collection` delta per-href collapse (duplicates / contradictory states) (fixed in `d97e4c8`)
 - Full `sync-collection` bootstrap includes live cards after journal prune (fixed in `213697e`)
 - `sync-collection` continuation pages remain valid across prune (fixed in `fe65dde`)
