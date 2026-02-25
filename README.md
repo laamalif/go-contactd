@@ -114,6 +114,14 @@ Logging / proxy:
 | `CONTACTD_LOG_LEVEL` | `--log-level` | `info` | Runtime `slog` level (`debug|info|warn|error`) |
 | `CONTACTD_LOG_FORMAT` | `--log-format` | `text` | Runtime `slog` format (`text|json`) |
 | `CONTACTD_TRUST_PROXY_HEADERS` | `--trust-proxy-headers` | `false` | Use `X-Forwarded-*` for access-log remote only behind trusted proxy boundary |
+| `CONTACTD_AUTH_MAX_CONCURRENCY` | `--auth-max-concurrency` | `8` | Max concurrent auth checks (`0` disables cap) |
+| `CONTACTD_AUTH_FAIL_DELAY` | `--auth-fail-delay` | `0s` | Delay failed auth responses (`0` disables) |
+
+Logging behavior:
+
+- `CONTACTD_LOG_FORMAT=text` (default) uses daemon-style text logs.
+- On startup, text mode prints a compact `server starting ...` line plus a `config CONTACTD_...=...` block with effective resolved values (flags > env > defaults).
+- `CONTACTD_LOG_FORMAT=json` keeps startup logging compact (no verbose config block).
 
 Bootstrap / maintenance:
 
