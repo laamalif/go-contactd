@@ -490,7 +490,7 @@ func TestLogging_Format_TextAndJSON(t *testing.T) {
 	}
 }
 
-func TestLogServerStarting_IncludesEffectiveConfigSnapshot(t *testing.T) {
+func TestLogServerStarting_TextMode_EmitsConfigBlock(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -523,20 +523,32 @@ func TestLogServerStarting_IncludesEffectiveConfigSnapshot(t *testing.T) {
 		"base_url=https://contacts.example.test",
 		"log_level=debug",
 		"log_format=text",
-		"request_max_bytes=20971520",
-		"vcard_max_bytes=10485760",
 		"trust_proxy_headers=true",
-		"force_seed=true",
-		"default_book_slug=people",
-		"default_book_name=\"People Book\"",
-		"change_retention_days=90",
-		"change_retention_max_revisions=1234",
-		"prune_interval=12h0m0s",
-		"enable_addressbook_color=true",
-		"auth_max_concurrency=3",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("startup log missing %q in %q", want, out)
+		}
+	}
+	for _, want := range []string{
+		": config CONTACTD_LISTEN_ADDR=:18080",
+		": config CONTACTD_DB_PATH=/tmp/contactd.sqlite",
+		": config CONTACTD_BASE_URL=https://contacts.example.test",
+		": config CONTACTD_LOG_LEVEL=debug",
+		": config CONTACTD_LOG_FORMAT=text",
+		": config CONTACTD_TRUST_PROXY_HEADERS=true",
+		": config CONTACTD_REQUEST_MAX_BYTES=20971520",
+		": config CONTACTD_VCARD_MAX_BYTES=10485760",
+		": config CONTACTD_FORCE_SEED=true",
+		": config CONTACTD_DEFAULT_BOOK_SLUG=people",
+		": config CONTACTD_DEFAULT_BOOK_NAME=\"People Book\"",
+		": config CONTACTD_CHANGE_RETENTION_DAYS=90",
+		": config CONTACTD_CHANGE_RETENTION_MAX_REVISIONS=1234",
+		": config CONTACTD_PRUNE_INTERVAL=12h0m0s",
+		": config CONTACTD_ENABLE_ADDRESSBOOK_COLOR=true",
+		": config CONTACTD_AUTH_MAX_CONCURRENCY=3",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("startup config block missing %q in %q", want, out)
 		}
 	}
 }
@@ -590,6 +602,8 @@ func TestLogServerStarting_JSONOmitsVerboseConfigSnapshot(t *testing.T) {
 		`"prune_interval":`,
 		`"enable_addressbook_color":`,
 		`"auth_max_concurrency":`,
+		`"msg":"config"`,
+		`"CONTACTD_`,
 	} {
 		if strings.Contains(out, notWant) {
 			t.Fatalf("json startup log should omit verbose config key %q in %q", notWant, out)

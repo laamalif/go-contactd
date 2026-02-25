@@ -106,17 +106,30 @@ func logServerStarting(logger *slog.Logger, cfg config.ServeConfig) {
 		"log_level", cfg.LogLevel,
 		"log_format", cfg.LogFormat,
 		"trust_proxy_headers", cfg.TrustProxyHeaders,
-		"request_max_bytes", cfg.RequestMaxBytes,
-		"vcard_max_bytes", cfg.VCardMaxBytes,
-		"force_seed", cfg.ForceSeed,
-		"default_book_slug", cfg.DefaultBookSlug,
-		"default_book_name", cfg.DefaultBookName,
-		"change_retention_days", cfg.ChangeRetentionDays,
-		"change_retention_max_revisions", cfg.ChangeRetentionMaxRevisions,
-		"prune_interval", cfg.PruneInterval,
-		"enable_addressbook_color", cfg.EnableAddressbookColor,
-		"auth_max_concurrency", cfg.AuthMaxConcurrency,
 	)
+	for _, kv := range []struct {
+		key string
+		val any
+	}{
+		{"CONTACTD_LISTEN_ADDR", cfg.ListenAddr},
+		{"CONTACTD_DB_PATH", cfg.DBPath},
+		{"CONTACTD_BASE_URL", cfg.BaseURL},
+		{"CONTACTD_LOG_LEVEL", cfg.LogLevel},
+		{"CONTACTD_LOG_FORMAT", cfg.LogFormat},
+		{"CONTACTD_TRUST_PROXY_HEADERS", cfg.TrustProxyHeaders},
+		{"CONTACTD_REQUEST_MAX_BYTES", cfg.RequestMaxBytes},
+		{"CONTACTD_VCARD_MAX_BYTES", cfg.VCardMaxBytes},
+		{"CONTACTD_FORCE_SEED", cfg.ForceSeed},
+		{"CONTACTD_DEFAULT_BOOK_SLUG", cfg.DefaultBookSlug},
+		{"CONTACTD_DEFAULT_BOOK_NAME", cfg.DefaultBookName},
+		{"CONTACTD_CHANGE_RETENTION_DAYS", cfg.ChangeRetentionDays},
+		{"CONTACTD_CHANGE_RETENTION_MAX_REVISIONS", cfg.ChangeRetentionMaxRevisions},
+		{"CONTACTD_PRUNE_INTERVAL", cfg.PruneInterval},
+		{"CONTACTD_ENABLE_ADDRESSBOOK_COLOR", cfg.EnableAddressbookColor},
+		{"CONTACTD_AUTH_MAX_CONCURRENCY", cfg.AuthMaxConcurrency},
+	} {
+		logger.Info("config", "event", "config", kv.key, kv.val)
+	}
 }
 
 func (w *deferredLogWriter) Write(p []byte) (int, error) {
