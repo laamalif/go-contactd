@@ -951,8 +951,26 @@ func (h *handler) handleAddressbookDelete(w http.ResponseWriter, r *http.Request
 }
 
 func (h *handler) handleAddressbookMultiGet(w http.ResponseWriter, r *http.Request, hrefs []string) {
+	targetUser, targetSlug, ok := parseAddressbookPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if _, err := h.opts.Backend.GetAddressBook(r.Context(), r.URL.Path); err != nil {
+		writeBackendError(w, err)
+		return
+	}
+
 	responses := make([]davxml.Response, 0, len(hrefs))
 	for _, href := range hrefs {
+		user, slug, _, ok := parseCardPath(href)
+		if !ok || user != targetUser || slug != targetSlug {
+			responses = append(responses, davxml.Response{
+				Href:   href,
+				Status: davxml.StatusLine(http.StatusNotFound),
+			})
+			continue
+		}
 		ao, err := h.opts.Backend.GetAddressObject(r.Context(), href, nil)
 		if err != nil {
 			if status, ok := httpStatusFromError(err); ok && status == http.StatusNotFound {
@@ -1528,9 +1546,8 @@ func (h *handler) handleCardDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func isCardPath(p string) bool {
-	clean := path.Clean("/" + strings.TrimSpace(p))
-	parts := strings.Split(strings.Trim(clean, "/"), "/")
-	return len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] != ""
+	_, _, _, ok := parseCardPath(p)
+	return ok
 }
 
 func parseAddressbookPath(p string) (user, slug string, ok bool) {
@@ -1543,6 +1560,33 @@ func parseAddressbookPath(p string) (user, slug string, ok bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
+}
+
+func parseCardPath(p string) (user, slug, href string, ok bool) {
+	raw := strings.TrimSpace(p)
+	if raw == "" {
+		return "", "", "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", "", "", false
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", "", "", false
+	}
+	pathValue := u.Path
+	if pathValue == "" {
+		pathValue = raw
+	}
+	clean := path.Clean("/" + strings.TrimPrefix(pathValue, "/"))
+	parts := strings.Split(strings.Trim(clean, "/"), "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", "", false
+	}
+	if strings.HasSuffix(pathValue, "/") {
+		return "", "", "", false
+	}
+	return parts[0], parts[1], parts[2], true
 }
 
 func isMaxBytesError(err error) bool {

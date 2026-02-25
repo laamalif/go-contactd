@@ -2980,6 +2980,101 @@ func TestHandler_Report_AddressbookMultiget_WrongNamespaceHrefIgnored(t *testing
 	}
 }
 
+func TestHandler_Report_AddressbookMultiget_CrossCollectionHrefReturns404NoLeak(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	uid, err := store.UserIDByUsername(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("UserIDByUsername: %v", err)
+	}
+	if _, _, err := store.EnsureAddressbook(context.Background(), uid, "private", "Private"); err != nil {
+		t.Fatalf("EnsureAddressbook private: %v", err)
+	}
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/private/p.vcf", mustSampleCard("uid-private", "Alice Secret"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject private: %v", err)
+	}
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:addressbook-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:href>/alice/private/p.vcf</D:href>
+</C:addressbook-multiget>`
+	req := httptest.NewRequest("REPORT", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusMultiStatus; got != want {
+		t.Fatalf("status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "Alice Secret") {
+		t.Fatalf("body leaked cross-collection card: %q", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "404 Not Found") {
+		t.Fatalf("body missing 404 response: %q", rr.Body.String())
+	}
+}
+
+func TestHandler_Report_AddressbookMultiget_InvalidTargetPathReturns404(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", mustSampleCard("uid-a", "Alice A"), &gocarddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("seed PutAddressObject a: %v", err)
+	}
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			return username, true, nil
+		},
+		Backend:         backend,
+		AttachPrincipal: contactcarddav.WithPrincipal,
+		Sync:            carddavx.NewSyncService(store),
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<C:addressbook-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:href>/alice/contacts/a.vcf</D:href>
+</C:addressbook-multiget>`
+
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{name: "cross-tenant-target", path: "/bob/contacts/"},
+		{name: "nonexistent-target", path: "/doesnotexist/whatever/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("REPORT", tc.path, bytes.NewBufferString(reqBody))
+			req.SetBasicAuth("alice", "secret")
+			req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+
+			if got, want := rr.Code, http.StatusNotFound; got != want {
+				t.Fatalf("status = %d, want %d body=%q", got, want, rr.Body.String())
+			}
+			if strings.Contains(rr.Body.String(), "Alice A") {
+				t.Fatalf("body leaked card data: %q", rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestHandler_Report_AddressbookQuery_ReturnsCardsWithAddressData(t *testing.T) {
 	t.Parallel()
 
