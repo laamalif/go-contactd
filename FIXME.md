@@ -39,9 +39,9 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - Repeated failed auth attempts trigger throttle behavior (without breaking valid auth semantics)
   - Throttle keying behavior documented and tested (direct remote vs trusted proxy mode)
 
-### FIXME-019 (P1) `contactctl import` still lacks full bounded-read and content-TOCTOU hardening for untrusted file inputs (local CLI DoS / tamper risk)
+### FIXME-019 (P1) `contactctl import` still lacks full content-TOCTOU hardening for untrusted directory inputs (local admin-path tamper risk)
 
-- Status: partially fixed (`f03d63b`); remaining risk validated by code inspection and TODO repro evidence
+- Status: partially fixed (`89d03cf`, `f03d63b`, `3af97ee`, `5fd24b5`); remaining risk validated by code inspection and TODO repro evidence
 - Impact:
   - Directory import can also ingest tampered content that was not present at initial directory snapshot (regular-file content swap race).
   - This is a local/admin-path availability issue, not a remote HTTP issue.
@@ -49,17 +49,18 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - `internal/ctl/ctl.go` (`importFromDir`)
   - `internal/ctl/ctl.go` (`importFromConcatFile`)
 - Root cause:
-  - Directory mode still enumerates names and later opens by path; content can change between directory snapshot and later open/read (regular-file content TOCTOU), even though file-type/symlink checks are improved.
+  - Directory mode still enumerates names and later opens by path; a file’s content may still change after the directory snapshot and before/during read while preserving snapshot-visible metadata (same inode, same size/mtime edge cases).
 - Partial fixes already applied:
   - `89d03cf`: rejects symlink/non-regular dir import entries via path checks
   - `f03d63b`: opens import files via stable handle, revalidates opened descriptor type, rejects non-regular concat sources, and bounds dir-mode file reads before full load
   - `3af97ee`: adds total-input cap for concat import sources (default `64 MiB`) and bounded decode reader
+  - `5fd24b5`: captures directory-entry file snapshots and rejects open-time inode/size/mtime drift before import reads
 - Revalidated evidence (from TODO):
   - Regular-file swap race changed imported content while import still exited success (`race_benign=0`, `race_evil=1`), demonstrating content TOCTOU.
 - Suggested fix:
   - Optional stronger dir-mode hardening:
     - use directory FD + openat-style workflow (or equivalent) to reduce name-to-content TOCTOU surface further
-    - hash/mtime/inode revalidation strategy if snapshot consistency is desired
+    - hash-based snapshot verification (or stronger sealed-snapshot workflow) if strict content consistency is required
 - Tests to add:
   - oversized regular `.vcf` in dir mode is rejected without reading entire file into memory (best-effort behavioral test)
   - dir import regular-file content swap cannot alter imported bytes after snapshot/open (best-effort deterministic harness)
