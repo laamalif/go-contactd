@@ -5,25 +5,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 
 ## Open Issues
 
-### FIXME-004 (P2) `PROPPATCH` namespace confusion and malformed mixed-namespace structure acceptance
-
-- Status: validated (code inspection)
-- Impact:
-  - Non-DAV root `propertyupdate` is accepted.
-  - Mixed-namespace structure (e.g. `X:set`) can still produce operations because the parser only partially enforces DAV structure and uses depth-based parsing.
-- Affected code:
-  - `internal/server/handler.go` (`parseProppatchRequest`)
-- Root cause:
-  - Root checks only `Local == "propertyupdate"`.
-  - Parser can enter `inProp` and append ops even when `mode` is not a valid DAV `set/remove`.
-- Suggested fix:
-  - Require `DAV:` root namespace.
-  - Require DAV `set`/`remove` structure before accepting props.
-  - Reject malformed structures instead of silently producing ops.
-- Tests to add:
-  - Non-DAV root rejected.
-  - `X:set` / mixed namespace structure rejected and no metadata mutation occurs.
-
 ### FIXME-016 (P1) No auth throttling/lockout/rate-limit enables practical password spraying after enumeration
 
 - Status: validated operationally (TODO includes attack-chain repro); code inspection confirms no throttling/lockout in auth path
@@ -110,26 +91,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - deterministic service test with >`syncCursorMaxItems` full-sync items, prune between pages, page2 continuation still succeeds
   - HTTP-level regression for `REPORT sync-collection` empty-token pagination > cache threshold (optional; may be heavy)
 
-### FIXME-026 (P1) `sync-collection` continuation cursor cache has no hard size cap/eviction and can grow unbounded under authenticated load
-
-- Status: validated by code inspection and user repro evidence
-- Impact:
-  - Authenticated clients can create many distinct paginated sync cursors, causing unbounded in-memory growth (`s.page` map and cached items) until TTL expiry.
-  - This can become a memory-DoS vector even after multiget fan-out hardening.
-- Affected code:
-  - `internal/carddavx/sync.go` (`putCursor`, `takeCursorPage`, `SyncService.page`)
-- Root cause:
-  - Cursor entries expire by TTL only; there is no global entry cap, item cap across all cursors, or eviction policy.
-  - `syncCursorMaxItems` limits items per cursor, not total cache memory.
-- Revalidated evidence (from user repro):
-  - Crafted token requests drove cache to `cursor_entries=1000`, `total_cached_items=1000000`
-- Suggested fix:
-  - Add global cursor cache limits (entry count and/or total cached items) with eviction (e.g. oldest-first / nearest-expiry).
-  - Consider refusing to cache new cursors when limits are exceeded and return non-paginated fallback behavior safely.
-- Tests to add:
-  - deterministic cache growth test enforces max entries/items and eviction behavior
-  - pagination still works for recent cursors after eviction pressure
-
 ### FIXME-027 (P1) REPORT multistatus responses are fully marshaled in memory (authenticated response-amplification memory DoS)
 
 - Status: validated by code inspection and user repro evidence
@@ -161,6 +122,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - Strong ETag mismatch vs GET bytes (fixed in `2a18321`)
 - Import partial commit / non-atomic batch failure (fixed in `84d8c9d`)
 - Directory import trailing garbage / multi-card single-file acceptance (fixed in `b46f873`)
+- `PROPPATCH` namespace confusion / mixed-namespace structure acceptance (fixed in `56c045f`)
 - `contactctl import` directory symlink read escape (fixed in `89d03cf`)
 - `contactctl export` symlink output clobber (`dir` and `concat --out`) (fixed in `89d03cf`)
 - Basic Auth missing-user timing parity / dummy bcrypt compare (fixed in `1e7a4c5`)
@@ -177,6 +139,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - `contactctl export --format dir` hardlink/TOCTOU clobber in attacker-controlled output directory (fixed in `1315505`)
 - `contactctl import --dry-run` advisory/non-snapshot semantics documented in help (fixed in `cdd08dd`)
 - `REPORT address-data` bytes now use raw vCard bytes to match advertised `getetag` (fixed in `fcbb843`)
+- `sync-collection` cursor cache global size caps/eviction (fixed in `96f5637`)
 - `sync-collection` delta per-href collapse (duplicates / contradictory states) (fixed in `d97e4c8`)
 - Full `sync-collection` bootstrap includes live cards after journal prune (fixed in `213697e`)
 - `sync-collection` continuation pages remain valid across prune (fixed in `fe65dde`)
