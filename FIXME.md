@@ -142,29 +142,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 - Tests to add:
   - Deterministic race test proving returned delta always advances token when any change item is returned.
 
-### FIXME-021 (P1) `sync-collection` delta emits raw journal rows without per-href collapse (duplicates / contradictory states in one page)
-
-- Status: validated by code inspection; TODO includes reproducible evidence
-- Impact:
-  - A single sync response can contain the same href multiple times after rapid mutations.
-  - A single page can contain contradictory states for one href (e.g. one update with `getetag` plus one `404` delete tombstone).
-  - Clients may replay duplicate work or observe ambiguous final state from one sync page.
-- Affected code:
-  - `internal/carddavx/sync.go` (`SyncCollection`, delta-token path)
-- Root cause:
-  - Delta sync appends each `card_changes` row directly to `Updated` / `Deleted` with no per-href coalescing to final state for the requested token window.
-- Revalidated evidence (from TODO):
-  - Rapid 3x PUT to the same href produced `dup_href_count=3` in one sync response (same href repeated with different ETags).
-  - PUT then DELETE for one href produced both an `etag` update entry and a `404` delete entry in the same sync response.
-- Suggested fix:
-  - Collapse changes per href within the returned window to the latest effective state before building the response.
-  - Preserve token advancement/truncation semantics while coalescing (especially with page limits).
-  - Define and test deterministic ordering for the collapsed output.
-- Tests to add:
-  - multiple updates to same href collapse to one latest update entry
-  - update+delete in same window collapses to one delete entry
-  - delete+recreate in same window collapses to one latest update entry (if supported by journal ordering)
-
 ### FIXME-016 (P1) No auth throttling/lockout/rate-limit enables practical password spraying after enumeration
 
 - Status: validated operationally (TODO includes attack-chain repro); code inspection confirms no throttling/lockout in auth path
@@ -373,6 +350,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - `Store.PragmaString` / `Store.PragmaInt` PRAGMA-name validation (fixed in `48d0b25`)
 - `contactctl import` honors `CONTACTD_VCARD_MAX_BYTES` (fixed in `7344b19`)
 - `contactctl export --format concat` seam normalization (fixed in `9a12b6c`)
+- `sync-collection` delta per-href collapse (duplicates / contradictory states) (fixed in `d97e4c8`)
 
 ## Notes
 
