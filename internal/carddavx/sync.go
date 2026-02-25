@@ -229,7 +229,7 @@ func (s *SyncService) buildPagedSyncResult(addressbookID, headRevision int64, us
 			ETag: `"` + it.ETagHex + `"`,
 		})
 	}
-	if truncated && len(remaining) <= syncCursorMaxItems {
+	if truncated {
 		s.putCursor(out.SyncToken, syncCursor{
 			AddressbookID: addressbookID,
 			HeadRevision:  headRevision,
@@ -284,7 +284,7 @@ func (s *SyncService) takeCursorPage(token SyncToken, username, slug string, lim
 			ETag: `"` + it.ETagHex + `"`,
 		})
 	}
-	if truncated && len(remaining) <= syncCursorMaxItems {
+	if truncated {
 		s.putCursorLocked(out.SyncToken, syncCursor{
 			AddressbookID: token.AddressbookID,
 			HeadRevision:  cur.HeadRevision,

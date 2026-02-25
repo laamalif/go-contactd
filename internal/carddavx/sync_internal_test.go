@@ -125,6 +125,68 @@ func TestTakeCursorPage_ReinsertedContinuationEnforcesGlobalCacheCaps(t *testing
 	}
 }
 
+func TestBuildPagedSyncResult_CachesContinuationBeyondLegacyThreshold(t *testing.T) {
+	t.Parallel()
+
+	svc := &SyncService{page: make(map[string]syncCursor)}
+	items := make([]syncPageItem, syncCursorMaxItems+2)
+	for i := range items {
+		items[i] = syncPageItem{
+			Revision: int64(i + 1),
+			Href:     "a.vcf",
+			ETagHex:  "etag",
+		}
+	}
+
+	out, err := svc.buildPagedSyncResult(1, int64(len(items)), "alice", "contacts", items, 1)
+	if err != nil {
+		t.Fatalf("buildPagedSyncResult: %v", err)
+	}
+	if !out.Truncated {
+		t.Fatal("out.Truncated=false, want true")
+	}
+	if _, ok := svc.page[out.SyncToken]; !ok {
+		t.Fatalf("expected continuation cursor for token %q to be cached", out.SyncToken)
+	}
+}
+
+func TestTakeCursorPage_ReinsertsContinuationBeyondLegacyThreshold(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	svc := &SyncService{
+		page: map[string]syncCursor{
+			FormatSyncToken(1, 1): {
+				AddressbookID: 1,
+				HeadRevision:  int64(syncCursorMaxItems + 3),
+				ExpiresAt:     now.Add(time.Minute),
+				Items:         make([]syncPageItem, syncCursorMaxItems+2),
+			},
+		},
+	}
+	for i := range svc.page[FormatSyncToken(1, 1)].Items {
+		svc.page[FormatSyncToken(1, 1)].Items[i] = syncPageItem{
+			Revision: int64(i + 2),
+			Href:     "a.vcf",
+			ETagHex:  "etag",
+		}
+	}
+
+	out, ok := svc.takeCursorPage(SyncToken{AddressbookID: 1, Revision: 1}, "alice", "contacts", 1)
+	if !ok {
+		t.Fatal("takeCursorPage ok=false, want true")
+	}
+	if !out.Truncated {
+		t.Fatal("out.Truncated=false, want true")
+	}
+	if _, stillOld := svc.page[FormatSyncToken(1, 1)]; stillOld {
+		t.Fatal("old cursor token still present after take")
+	}
+	if _, ok := svc.page[out.SyncToken]; !ok {
+		t.Fatalf("expected continuation cursor for token %q to be reinserted", out.SyncToken)
+	}
+}
+
 func countCachedSyncItems(m map[string]syncCursor) int {
 	total := 0
 	for _, cur := range m {
