@@ -49,29 +49,31 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 
 ### FIXME-019 (P1) `contactctl import` still lacks full content-TOCTOU hardening for untrusted directory inputs (local admin-path tamper risk)
 
-- Status: partially fixed (`89d03cf`, `f03d63b`, `3af97ee`, `5fd24b5`); remaining risk validated by code inspection and TODO repro evidence
+- Status: partially fixed (`89d03cf`, `f03d63b`, `3af97ee`, `5fd24b5`, `acbf679`); residual risk is narrower and mostly requires highly-controlled same-file mutation timing
 - Impact:
-  - Directory import can also ingest tampered content that was not present at initial directory snapshot (regular-file content swap race).
+  - Directory import may still ingest tampered content not present at initial directory snapshot in edge cases where a file is modified in place while preserving snapshot-visible metadata and matching the pre-apply hash recheck window assumptions.
   - This is a local/admin-path availability issue, not a remote HTTP issue.
 - Affected code:
   - `internal/ctl/ctl.go` (`importFromDir`)
   - `internal/ctl/ctl.go` (`importFromConcatFile`)
 - Root cause:
-  - Directory mode still enumerates names and later opens by path; a file’s content may still change after the directory snapshot and before/during read while preserving snapshot-visible metadata (same inode, same size/mtime edge cases).
+  - Directory mode is now best-effort hardened with snapshot metadata checks and pre-apply content hash revalidation, but it still cannot provide a true filesystem snapshot of mutable/untrusted directories.
+  - A sufficiently timed same-file mutation that preserves metadata and defeats the hash recheck timing window can still alter imported content (local adversary / mutable source tree scenario).
 - Partial fixes already applied:
   - `89d03cf`: rejects symlink/non-regular dir import entries via path checks
   - `f03d63b`: opens import files via stable handle, revalidates opened descriptor type, rejects non-regular concat sources, and bounds dir-mode file reads before full load
   - `3af97ee`: adds total-input cap for concat import sources (default `64 MiB`) and bounded decode reader
   - `5fd24b5`: captures directory-entry file snapshots and rejects open-time inode/size/mtime drift before import reads
+  - `acbf679`: revalidates dir-import file contents by hash before batch apply, catching in-place mutations after initial read
 - Revalidated evidence (from TODO):
-  - Regular-file swap race changed imported content while import still exited success (`race_benign=0`, `race_evil=1`), demonstrating content TOCTOU.
+  - Regular-file swap race changed imported content while import still exited success (`race_benign=0`, `race_evil=1`), demonstrating content TOCTOU (before latest hash revalidation hardening).
 - Suggested fix:
-  - Optional stronger dir-mode hardening:
-    - use directory FD + openat-style workflow (or equivalent) to reduce name-to-content TOCTOU surface further
-    - hash-based snapshot verification (or stronger sealed-snapshot workflow) if strict content consistency is required
+  - Optional stronger dir-mode hardening if strict content snapshot semantics are required:
+    - use a sealed source snapshot workflow (copy/import from immutable temp snapshot, fs snapshot, or operator-provided quiesced directory)
+    - directory FD + openat-style workflow (or equivalent) to further reduce name-resolution TOCTOU surface
 - Tests to add:
   - oversized regular `.vcf` in dir mode is rejected without reading entire file into memory (best-effort behavioral test)
-  - dir import regular-file content swap cannot alter imported bytes after snapshot/open (best-effort deterministic harness)
+  - dir import same-file content mutation race is rejected or documented as unsupported (best-effort deterministic harness)
   - concat import from non-regular source is rejected (already covered; keep regression)
   - concat import total-input cap is enforced on large regular files (already covered; keep regression)
 
