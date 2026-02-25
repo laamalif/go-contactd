@@ -352,7 +352,7 @@ func TestHandler_AccessLog_ProxyRemoteBehavior_TrustDisabledAndEnabled(t *testin
 	rrEnabled := httptest.NewRecorder()
 	hEnabled.ServeHTTP(rrEnabled, makeReq())
 	entryEnabled := parseJSONLogLine(t, nonEmptyLines(enabledBuf.String())[0])
-	if got, want := entryEnabled["remote"], "203.0.113.10"; got != want {
+	if got, want := entryEnabled["remote"], "10.0.0.5"; got != want {
 		t.Fatalf("trust enabled remote = %#v, want %q", got, want)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -46,6 +47,31 @@ func TestRequestRemoteForLog_DirectSocketReturnsHostOnly(t *testing.T) {
 
 	if got, want := requestRemoteForLog(req, false), "10.0.0.5"; got != want {
 		t.Fatalf("requestRemoteForLog(trust=false) = %q, want %q", got, want)
+	}
+}
+
+func TestRequestRemoteForLog_TrustProxyUsesRightmostValidXFFHop(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.RemoteAddr = "10.0.0.5:4242"
+	req.Header.Set("X-Forwarded-For", "198.51.100.66, 203.0.113.9")
+
+	if got, want := requestRemoteForLog(req, true), "203.0.113.9"; got != want {
+		t.Fatalf("requestRemoteForLog(trust=true) = %q, want %q", got, want)
+	}
+}
+
+func TestRequestRemoteForLog_TrustProxyOversizeHeadersFallbackToSocketRemote(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.RemoteAddr = "10.0.0.5:4242"
+	req.Header.Set("X-Forwarded-For", strings.Repeat("1", 5000))
+	req.Header.Set("X-Real-IP", strings.Repeat("2", 5000))
+
+	if got, want := requestRemoteForLog(req, true), "10.0.0.5"; got != want {
+		t.Fatalf("requestRemoteForLog(trust=true oversize xff) = %q, want %q", got, want)
 	}
 }
 

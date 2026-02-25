@@ -254,20 +254,25 @@ func (h *handler) logAccess(r *http.Request, w *loggingResponseWriter, dur time.
 }
 
 func requestRemoteForLog(r *http.Request, trustProxy bool) string {
+	const maxTrustedProxyHeaderBytes = 4096
 	if r == nil {
 		return ""
 	}
 	if trustProxy {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" && len(xff) <= maxTrustedProxyHeaderBytes {
 			parts := strings.Split(xff, ",")
-			for _, part := range parts {
-				if v := strings.TrimSpace(part); v != "" {
-					return v
+			for i := len(parts) - 1; i >= 0; i-- {
+				if v := strings.TrimSpace(parts[i]); v != "" {
+					if ip := net.ParseIP(v); ip != nil {
+						return ip.String()
+					}
 				}
 			}
 		}
-		if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
-			return xrip
+		if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" && len(xrip) <= maxTrustedProxyHeaderBytes {
+			if ip := net.ParseIP(xrip); ip != nil {
+				return ip.String()
+			}
 		}
 	}
 	if r.RemoteAddr == "" {
