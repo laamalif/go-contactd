@@ -73,32 +73,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - Repeated failed auth attempts trigger throttle behavior (without breaking valid auth semantics)
   - Throttle keying behavior documented and tested (direct remote vs trusted proxy mode)
 
-### FIXME-023 (P1) Background prune can invalidate freshly issued `sync-collection` continuation tokens mid-pagination
-
-- Status: validated by TODO repro evidence; code inspection confirms mechanism in stale-token gap detection
-- Impact:
-  - A client can receive a continuation token from page 1 and then immediately get `403 valid-sync-token` on page 2 during normal operation if pruning runs between requests.
-  - This causes pagination churn/full-resync loops despite correct client behavior.
-- Affected code:
-  - `internal/carddavx/sync.go` (`SyncCollection`, delta path gap detection)
-  - `internal/daemon/daemon.go` (background prune ticker)
-  - `internal/db/store.go` (prune by max revisions / age)
-- Root cause:
-  - Gap detection intentionally rejects tokens when intermediate revisions are missing.
-  - Background pruning can remove those intermediate revisions after the server has already issued a continuation token.
-- Revalidated evidence (from TODO):
-  - With `--change-retention-max-revisions 3 --prune-interval 1s`:
-    - page 1 returned `page1_token=urn:contactd:sync:1:12`
-    - prune reduced journal to `post_prune_changes=3`
-    - page 2 with that token returned `403` + `valid-sync-token`
-- Suggested fix:
-  - Prevent pruning from invalidating freshly issued pagination tokens within a practical sync window, or
-  - move pagination to a stable snapshot/watermark model, or
-  - document aggressive-prune behavior and recommend retention settings that exceed sync page completion windows (minimum mitigation).
-- Tests to add:
-  - page-1 continuation token remains valid across a prune tick (for chosen mitigation), or
-  - explicit regression/docs test capturing current behavior if kept by design
-
 ### FIXME-019 (P1) `contactctl import` lacks bounded reads and stable file handles for untrusted file inputs (local CLI DoS / TOCTOU hang risk)
 
 - Status: validated by code inspection (current-tree follow-up after symlink hardening)
@@ -203,6 +177,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - `contactctl export --format concat` seam normalization (fixed in `9a12b6c`)
 - `sync-collection` delta per-href collapse (duplicates / contradictory states) (fixed in `d97e4c8`)
 - Full `sync-collection` bootstrap includes live cards after journal prune (fixed in `213697e`)
+- `sync-collection` continuation pages remain valid across prune (fixed in `fe65dde`)
 - `REPORT` XML namespace enforcement (fixed in `bfb28e8`)
 - `REPORT addressbook-multiget` target ownership/collection binding (fixed in `509b5db`)
 - `addressbook-multiget` href cap + dedupe (fixed in `bc694e9`)
