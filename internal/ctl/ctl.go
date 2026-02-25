@@ -596,9 +596,36 @@ func writeDirExport(outDir string, cards []db.Card) error {
 		if err := rejectSymlinkOrSpecialOutputPath(path); err != nil {
 			return err
 		}
-		if err := os.WriteFile(path, c.VCard, 0o600); err != nil {
+		if err := writeFileAtomicInDir(outDir, path, c.VCard); err != nil {
 			return fmt.Errorf("write export file %s: %w", name, err)
 		}
+	}
+	return nil
+}
+
+func writeFileAtomicInDir(dir, finalPath string, data []byte) (retErr error) {
+	tmp, err := os.CreateTemp(dir, ".contactctl-export-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		if retErr != nil {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, finalPath); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
 	}
 	return nil
 }

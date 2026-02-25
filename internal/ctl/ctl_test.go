@@ -288,6 +288,57 @@ func TestRunCLI_ExportDir_RejectsSymlinkDestinationFile(t *testing.T) {
 	}
 }
 
+func TestRunCLI_ExportDir_DoesNotClobberHardlinkTarget(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedExportTestDB(t)
+	tmp := t.TempDir()
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll outDir: %v", err)
+	}
+	target := filepath.Join(tmp, "target.txt")
+	orig := []byte("DO NOT OVERWRITE\n")
+	if err := os.WriteFile(target, orig, 0o600); err != nil {
+		t.Fatalf("WriteFile target: %v", err)
+	}
+	if err := os.Link(target, filepath.Join(outDir, "a.vcf")); err != nil {
+		t.Fatalf("Link a.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"export",
+		"--username", "alice",
+		"--book", "contacts",
+		"--format", "dir",
+		"--out", outDir,
+		"-d", dbPath,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 0 {
+		t.Fatalf("code=%d want 0 stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr=%q want empty", stderr.String())
+	}
+
+	gotTarget, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile target: %v", err)
+	}
+	if string(gotTarget) != string(orig) {
+		t.Fatalf("target overwritten: got=%q want=%q", string(gotTarget), string(orig))
+	}
+
+	gotExport, err := os.ReadFile(filepath.Join(outDir, "a.vcf"))
+	if err != nil {
+		t.Fatalf("ReadFile out/a.vcf: %v", err)
+	}
+	if !strings.Contains(string(gotExport), "BEGIN:VCARD") {
+		t.Fatalf("out/a.vcf=%q want vcard bytes", string(gotExport))
+	}
+}
+
 func TestRunCLI_ExportConcat_RejectsSymlinkOutPath(t *testing.T) {
 	t.Parallel()
 
