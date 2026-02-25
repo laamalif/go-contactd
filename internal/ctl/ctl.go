@@ -3,6 +3,7 @@ package ctl
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -767,6 +768,11 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 		name string
 		info os.FileInfo
 	}
+	type importDirVerify struct {
+		path   string
+		info   os.FileInfo
+		digest [32]byte
+	}
 	files := make([]importDirFile, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
@@ -785,6 +791,7 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 
 	batch := make([]db.PutCardInput, 0, len(files))
+	verify := make([]importDirVerify, 0, len(files))
 	for _, file := range files {
 		name := file.name
 		href, err := safeExportCardFilename(name)
@@ -801,6 +808,11 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 		if err != nil {
 			return 0, 0, fmt.Errorf("read import file %s: %w", name, err)
 		}
+		verify = append(verify, importDirVerify{
+			path:   filePath,
+			info:   file.info,
+			digest: sha256.Sum256(raw),
+		})
 		card, err := decodeSingleCardBytes(raw)
 		if err != nil {
 			return 0, 0, fmt.Errorf("decode import file %s: %w", name, err)
@@ -810,6 +822,11 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 			return 0, 0, fmt.Errorf("import file %s: missing UID", name)
 		}
 		batch = append(batch, db.PutCardInput{AddressbookID: addressbookID, Href: href, UID: uid, VCard: raw})
+	}
+	for _, vf := range verify {
+		if err := verifyImportFileSnapshotUnchanged(vf.path, vf.info, vf.digest, vcardMaxBytes); err != nil {
+			return 0, 0, fmt.Errorf("import file %s: %w", filepath.Base(vf.path), err)
+		}
 	}
 	return applyImportedBatch(ctx, store, batch, dryRun)
 }
@@ -885,6 +902,22 @@ func readImportRegularFileBytes(f *os.File, info os.FileInfo, maxBytes int) ([]b
 		return nil, err
 	}
 	return raw, nil
+}
+
+func verifyImportFileSnapshotUnchanged(path string, snap os.FileInfo, wantDigest [32]byte, maxBytes int) error {
+	f, info, err := openImportRegularFileAtSnapshot(path, snap)
+	if err != nil {
+		return err
+	}
+	raw, err := readImportRegularFileBytes(f, info, maxBytes)
+	_ = f.Close()
+	if err != nil {
+		return err
+	}
+	if got := sha256.Sum256(raw); got != wantDigest {
+		return fmt.Errorf("import file content changed since directory snapshot")
+	}
+	return nil
 }
 
 func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID int64, path string, dryRun bool, vcardMaxBytes int) (int, int, error) {

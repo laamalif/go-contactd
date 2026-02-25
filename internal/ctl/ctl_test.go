@@ -3,11 +3,13 @@ package ctl
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/laamalif/go-contactd/internal/config"
 	"github.com/laamalif/go-contactd/internal/db"
@@ -60,6 +62,44 @@ func TestOpenImportRegularFileAtSnapshot_RejectsChangedFile(t *testing.T) {
 	}
 	if got := err.Error(); !strings.Contains(got, "changed") {
 		t.Fatalf("err=%q want changed message", got)
+	}
+}
+
+func TestVerifyImportFileSnapshotUnchanged_RejectsInPlaceContentMutation(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	p := filepath.Join(tmp, "a.vcf")
+	orig := []byte("BEGIN:VCARD\r\nUID:uid-a\r\nFN:Alpha\r\nEND:VCARD\r\n")
+	if err := os.WriteFile(p, orig, 0o600); err != nil {
+		t.Fatalf("WriteFile initial: %v", err)
+	}
+	snap, err := os.Lstat(p)
+	if err != nil {
+		t.Fatalf("Lstat snapshot: %v", err)
+	}
+	wantDigest := sha256.Sum256(orig)
+
+	// Same size payload, then restore mtime to simulate metadata-preserving tamper.
+	mut := []byte("BEGIN:VCARD\r\nUID:uid-a\r\nFN:Omega\r\nEND:VCARD\r\n")
+	if len(mut) != len(orig) {
+		t.Fatalf("mut len=%d want %d", len(mut), len(orig))
+	}
+	if err := os.WriteFile(p, mut, 0o600); err != nil {
+		t.Fatalf("WriteFile mutated: %v", err)
+	}
+	if err := os.Chtimes(p, snap.ModTime(), snap.ModTime()); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+	// Some filesystems round mtimes; keep test deterministic by ensuring we don't rely on granularity.
+	time.Sleep(10 * time.Millisecond)
+
+	err = verifyImportFileSnapshotUnchanged(p, snap, wantDigest, int(config.DefaultVCardMaxBytes))
+	if err == nil {
+		t.Fatal("verifyImportFileSnapshotUnchanged err=nil, want content-changed error")
+	}
+	if got := err.Error(); !strings.Contains(got, "content changed") {
+		t.Fatalf("err=%q want content changed message", got)
 	}
 }
 
