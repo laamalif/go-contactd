@@ -24,21 +24,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - Non-DAV root rejected.
   - `X:set` / mixed namespace structure rejected and no metadata mutation occurs.
 
-### FIXME-008 (P1) `sync-collection` token can fail to advance under concurrent writes (token-window race)
-
-- Status: validated as plausible by code inspection (TODO includes reproducible evidence; repro not re-run in this review)
-- Impact: Server may return changes while reusing the same sync token under concurrency, causing duplicate delta replay / sync thrash.
-- Affected code:
-  - `internal/carddavx/sync.go` (`SyncCollection`)
-- Suspected root cause:
-  - Split reads (`GetAddressbookByUsernameSlug` then `ListCardChangesSince`) without a consistent snapshot.
-  - Token computation starts from `ab.Revision` and can be lowered to observed rows, but race windows can produce stale/unchanged response token despite returned changes.
-- Suggested fix:
-  - Compute sync result against a consistent snapshot (transaction/read view), or derive token from observed max revision robustly.
-  - Add a deterministic concurrency harness regression in-tree.
-- Tests to add:
-  - Deterministic race test proving returned delta always advances token when any change item is returned.
-
 ### FIXME-016 (P1) No auth throttling/lockout/rate-limit enables practical password spraying after enumeration
 
 - Status: validated operationally (TODO includes attack-chain repro); code inspection confirms no throttling/lockout in auth path
@@ -175,6 +160,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - `Store.PragmaString` / `Store.PragmaInt` PRAGMA-name validation (fixed in `48d0b25`)
 - `contactctl import` honors `CONTACTD_VCARD_MAX_BYTES` (fixed in `7344b19`)
 - `contactctl export --format concat` seam normalization (fixed in `9a12b6c`)
+- `sync-collection` token non-advancing race under concurrent writes (fixed in `ae7d895`)
 - `sync-collection` delta per-href collapse (duplicates / contradictory states) (fixed in `d97e4c8`)
 - Full `sync-collection` bootstrap includes live cards after journal prune (fixed in `213697e`)
 - `sync-collection` continuation pages remain valid across prune (fixed in `fe65dde`)
