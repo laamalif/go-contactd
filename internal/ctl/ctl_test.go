@@ -34,6 +34,35 @@ func TestOpenImportRegularFile_RejectsFIFO(t *testing.T) {
 	}
 }
 
+func TestOpenImportRegularFileAtSnapshot_RejectsChangedFile(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	p := filepath.Join(tmp, "a.vcf")
+	if err := os.WriteFile(p, []byte("BEGIN:VCARD\r\nUID:a\r\nEND:VCARD\r\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile initial: %v", err)
+	}
+	snap, err := os.Lstat(p)
+	if err != nil {
+		t.Fatalf("Lstat snapshot: %v", err)
+	}
+	// Deterministic content change: change size so the snapshot check must fail.
+	if err := os.WriteFile(p, []byte("BEGIN:VCARD\r\nUID:aaaaaa\r\nEND:VCARD\r\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile changed: %v", err)
+	}
+
+	f, _, err := openImportRegularFileAtSnapshot(p, snap)
+	if err == nil {
+		if f != nil {
+			_ = f.Close()
+		}
+		t.Fatal("openImportRegularFileAtSnapshot error=nil, want changed file rejection")
+	}
+	if got := err.Error(); !strings.Contains(got, "changed") {
+		t.Fatalf("err=%q want changed message", got)
+	}
+}
+
 func TestRunCLI_ImportHelp_DryRunWarnsAdvisoryUnderConcurrency(t *testing.T) {
 	t.Parallel()
 

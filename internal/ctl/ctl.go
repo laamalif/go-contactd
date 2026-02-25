@@ -763,7 +763,11 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 	if err != nil {
 		return 0, 0, fmt.Errorf("read import dir: %w", err)
 	}
-	names := make([]string, 0, len(entries))
+	type importDirFile struct {
+		name string
+		info os.FileInfo
+	}
+	files := make([]importDirFile, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -772,18 +776,23 @@ func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, di
 		if !strings.HasSuffix(strings.ToLower(name), ".vcf") {
 			continue
 		}
-		names = append(names, name)
+		info, err := e.Info()
+		if err != nil {
+			return 0, 0, fmt.Errorf("stat import dir entry %s: %w", name, err)
+		}
+		files = append(files, importDirFile{name: name, info: info})
 	}
-	sort.Strings(names)
+	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 
-	batch := make([]db.PutCardInput, 0, len(names))
-	for _, name := range names {
+	batch := make([]db.PutCardInput, 0, len(files))
+	for _, file := range files {
+		name := file.name
 		href, err := safeExportCardFilename(name)
 		if err != nil {
 			return 0, 0, err
 		}
 		filePath := filepath.Join(dir, name)
-		f, info, err := openImportRegularFile(filePath)
+		f, info, err := openImportRegularFileAtSnapshot(filePath, file.info)
 		if err != nil {
 			return 0, 0, fmt.Errorf("import file %s: %w", name, err)
 		}
@@ -817,6 +826,20 @@ func openImportRegularFile(p string) (*os.File, os.FileInfo, error) {
 	if !mode.IsRegular() {
 		return nil, nil, fmt.Errorf("refusing non-regular import file")
 	}
+	return openImportRegularFileAtSnapshot(p, linfo)
+}
+
+func openImportRegularFileAtSnapshot(p string, snap os.FileInfo) (*os.File, os.FileInfo, error) {
+	if snap == nil {
+		return nil, nil, fmt.Errorf("stat import file: missing snapshot")
+	}
+	mode := snap.Mode()
+	if mode&os.ModeSymlink != 0 {
+		return nil, nil, fmt.Errorf("refusing symlink import file")
+	}
+	if !mode.IsRegular() {
+		return nil, nil, fmt.Errorf("refusing non-regular import file")
+	}
 	f, err := os.Open(p)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open import file: %w", err)
@@ -830,10 +853,14 @@ func openImportRegularFile(p string) (*os.File, os.FileInfo, error) {
 		_ = f.Close()
 		return nil, nil, fmt.Errorf("refusing non-regular import file")
 	}
-	// Best-effort race check: if the path was replaced between lstat and open, fail safe.
-	if !os.SameFile(linfo, info) {
+	// Best-effort race check: reject path replacement and obvious content changes since snapshot.
+	if !os.SameFile(snap, info) {
 		_ = f.Close()
 		return nil, nil, fmt.Errorf("import file changed during open")
+	}
+	if snap.Size() != info.Size() || !snap.ModTime().Equal(info.ModTime()) {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("import file changed since directory snapshot")
 	}
 	return f, info, nil
 }
