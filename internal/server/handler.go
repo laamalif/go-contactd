@@ -450,7 +450,7 @@ func parseProppatchRequest(body io.Reader) (proppatchRequest, error) {
 		case xml.StartElement:
 			if !rootSeen {
 				rootSeen = true
-				if t.Name.Local != "propertyupdate" {
+				if !matchXMLName(t.Name, xml.Name{Space: davxml.NamespaceDAV, Local: "propertyupdate"}) {
 					return proppatchRequest{}, fmt.Errorf("unexpected root %q", t.Name.Local)
 				}
 				depth = 1
@@ -460,11 +460,13 @@ func parseProppatchRequest(body io.Reader) (proppatchRequest, error) {
 			case depth == 1 && t.Name.Space == davxml.NamespaceDAV && (t.Name.Local == "set" || t.Name.Local == "remove"):
 				mode = t.Name.Local
 				depth++
-			case depth == 1 && t.Name.Space == davxml.NamespaceDAV:
-				depth++
-			case depth == 2 && t.Name.Space == davxml.NamespaceDAV && t.Name.Local == "prop":
+			case depth == 1:
+				return proppatchRequest{}, fmt.Errorf("invalid proppatch structure")
+			case depth == 2 && mode != "" && t.Name.Space == davxml.NamespaceDAV && t.Name.Local == "prop":
 				inProp = true
 				depth++
+			case depth == 2 && mode != "":
+				return proppatchRequest{}, fmt.Errorf("invalid proppatch structure")
 			case inProp && depth == 3:
 				op := proppatchOp{
 					Name:   t.Name,

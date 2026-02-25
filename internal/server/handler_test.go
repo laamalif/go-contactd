@@ -2574,6 +2574,76 @@ func TestHandler_Proppatch_TrailingXMLContentRejected(t *testing.T) {
 	}
 }
 
+func TestHandler_Proppatch_NonDAVRootRejected(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<X:propertyupdate xmlns:X="urn:not-dav" xmlns:D="DAV:">
+  <D:set><D:prop><D:displayname>bad</D:displayname></D:prop></D:set>
+</X:propertyupdate>`
+	req := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("PROPPATCH non-DAV root status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+}
+
+func TestHandler_Proppatch_MixedNamespaceSetRejected(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:not-dav">
+  <X:set>
+    <D:prop>
+      <D:displayname>bad</D:displayname>
+    </D:prop>
+  </X:set>
+</D:propertyupdate>`
+	req := httptest.NewRequest("PROPPATCH", "/alice/contacts/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("PROPPATCH mixed namespace set status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+}
+
 func TestHandler_Proppatch_AddressbookMetadata_PersistsAndPropfindExposes(t *testing.T) {
 	t.Parallel()
 
