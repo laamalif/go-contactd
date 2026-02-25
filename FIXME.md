@@ -192,39 +192,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 - Tests to add:
   - No-auth invalid protected path returns the same auth challenge behavior as a valid protected path.
 
-### FIXME-013 (P1) Full `sync-collection` (empty token) can omit live cards after normal journal pruning
-
-- Status: validated (code inspection; TODO includes reproducible evidence with age/max-revision prune)
-- Impact:
-  - A client performing a full sync (`sync-token` empty) can miss existing cards permanently if those cards' `card_changes` rows were pruned.
-  - This can happen under normal startup/background prune behavior (age prune and configured max-revisions prune).
-- Affected code:
-  - `internal/carddavx/sync.go` (`SyncCollection`, empty-token path)
-  - `internal/db/store.go` (`ListCurrentCardSyncStates`)
-  - `internal/daemon/daemon.go` (prune startup/ticker wiring)
-- Root cause:
-  - Full-sync state query uses `cards JOIN card_changes` and derives per-card revision from `MAX(card_changes.revision)`.
-  - If pruning removes all `card_changes` rows for a still-live card, that card disappears from the full-sync state view.
-- Revalidated evidence (from TODO):
-  - Max-revisions prune repro:
-    - `db_cards=60`, `db_changes=1`
-    - `addressbook-query` count = `60`
-    - empty-token `sync-collection` count = `1`, token `urn:contactd:sync:1:60`
-  - Age-prune repro:
-    - `db_cards=30`, `db_changes=0`
-    - `addressbook-query` count = `30`
-    - empty-token `sync-collection` count = `0`, token `urn:contactd:sync:1:30`
-    - repeat sync with that token remains empty while `addressbook-query` still shows all cards
-- Suggested fix:
-  - Ensure full-sync enumerates all live cards from `cards`, even if change history was pruned.
-  - Options:
-    - preserve at least the latest `card_changes` row per live card during prune, or
-    - persist last-change revision on `cards`, or
-    - use a left join with a fallback revision strategy that still includes all live cards (carefully preserving ordering/token semantics).
-- Tests to add:
-  - full sync after `PruneCardChangesByMaxRevisions` still returns all live cards
-  - full sync after age prune still returns all live cards
-
 ### FIXME-023 (P1) Background prune can invalidate freshly issued `sync-collection` continuation tokens mid-pagination
 
 - Status: validated by TODO repro evidence; code inspection confirms mechanism in stale-token gap detection
@@ -351,6 +318,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - `contactctl import` honors `CONTACTD_VCARD_MAX_BYTES` (fixed in `7344b19`)
 - `contactctl export --format concat` seam normalization (fixed in `9a12b6c`)
 - `sync-collection` delta per-href collapse (duplicates / contradictory states) (fixed in `d97e4c8`)
+- Full `sync-collection` bootstrap includes live cards after journal prune (fixed in `213697e`)
 
 ## Notes
 
