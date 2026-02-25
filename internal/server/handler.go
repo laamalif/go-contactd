@@ -1640,6 +1640,11 @@ func validateRequestPathPayload(u *url.URL) error {
 		if strings.Contains(decoded, "/") || strings.Contains(decoded, `\`) {
 			return fmt.Errorf("path separator in segment")
 		}
+		for i := 0; i < len(decoded); i++ {
+			if decoded[i] < 0x20 || decoded[i] == 0x7f {
+				return fmt.Errorf("control character in segment")
+			}
+		}
 	}
 	return nil
 }

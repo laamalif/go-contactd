@@ -1131,6 +1131,31 @@ func TestHandler_CardPath_RejectsTraversalSegment(t *testing.T) {
 	}
 }
 
+func TestHandler_ProtectedPath_RejectsControlCharactersInSegment(t *testing.T) {
+	t.Parallel()
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+	})
+
+	for _, esc := range []string{"%00", "%09", "%0A", "%0D", "%7F"} {
+		req := httptest.NewRequest(http.MethodGet, "/alice/contacts/a"+esc+"b.vcf", nil)
+		req.SetBasicAuth("alice", "secret")
+		rr := httptest.NewRecorder()
+
+		h.ServeHTTP(rr, req)
+
+		if got, want := rr.Code, http.StatusBadRequest; got != want {
+			t.Fatalf("GET control-char path %q status = %d, want %d body=%q", esc, got, want, rr.Body.String())
+		}
+	}
+}
+
 func TestHandler_CardPath_AllowsSafeFlatHrefWithDots(t *testing.T) {
 	t.Parallel()
 
