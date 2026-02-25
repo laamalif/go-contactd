@@ -46,6 +46,21 @@ func TestOpen_AppliesSQLitePragmasAndMigrations(t *testing.T) {
 	}
 }
 
+func TestPragmaHelpers_RejectInvalidNames(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	if _, err := store.PragmaString(ctx, "cache_size; CREATE TABLE inj_tbl (x TEXT); --"); err == nil {
+		t.Fatal("PragmaString invalid name err=nil, want error")
+	}
+	if _, err := store.PragmaInt(ctx, "busy_timeout; CREATE TABLE inj2 (x TEXT); --"); err == nil {
+		t.Fatal("PragmaInt invalid name err=nil, want error")
+	}
+}
+
 func TestComputeETag_DeterministicFromCanonicalBytes(t *testing.T) {
 	t.Parallel()
 

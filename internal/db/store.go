@@ -31,6 +31,19 @@ const bcryptDummyHashDefaultCost = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldG
 
 var bcryptCompareHashAndPassword = bcrypt.CompareHashAndPassword
 
+func validatePragmaName(name string) error {
+	if name == "" {
+		return fmt.Errorf("empty pragma name")
+	}
+	for i, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' || (i > 0 && r >= '0' && r <= '9') {
+			continue
+		}
+		return fmt.Errorf("invalid pragma name %q", name)
+	}
+	return nil
+}
+
 type TestHooks struct {
 	BeforeCardChangeInsert func() error
 }
@@ -137,6 +150,9 @@ func (s *Store) SetTestHooks(h TestHooks) {
 }
 
 func (s *Store) PragmaString(ctx context.Context, name string) (string, error) {
+	if err := validatePragmaName(name); err != nil {
+		return "", err
+	}
 	var v string
 	if err := s.db.QueryRowContext(ctx, fmt.Sprintf("PRAGMA %s;", name)).Scan(&v); err != nil {
 		return "", fmt.Errorf("pragma %s: %w", name, err)
@@ -145,6 +161,9 @@ func (s *Store) PragmaString(ctx context.Context, name string) (string, error) {
 }
 
 func (s *Store) PragmaInt(ctx context.Context, name string) (int, error) {
+	if err := validatePragmaName(name); err != nil {
+		return 0, err
+	}
 	var v int
 	if err := s.db.QueryRowContext(ctx, fmt.Sprintf("PRAGMA %s;", name)).Scan(&v); err != nil {
 		return 0, fmt.Errorf("pragma %s: %w", name, err)
