@@ -84,6 +84,19 @@ func logServerStarting(logger *slog.Logger, cfg config.ServeConfig) {
 	if logger == nil {
 		return
 	}
+	if strings.EqualFold(strings.TrimSpace(cfg.LogFormat), "json") {
+		logger.Info(
+			"server starting",
+			"event", "server starting",
+			"listen", cfg.ListenAddr,
+			"db_path", cfg.DBPath,
+			"base_url", cfg.BaseURL,
+			"log_level", cfg.LogLevel,
+			"log_format", cfg.LogFormat,
+			"trust_proxy_headers", cfg.TrustProxyHeaders,
+		)
+		return
+	}
 	logger.Info(
 		"server starting",
 		"event", "server starting",

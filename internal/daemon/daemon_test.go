@@ -499,7 +499,7 @@ func TestLogServerStarting_IncludesEffectiveConfigSnapshot(t *testing.T) {
 		DBPath:                      "/tmp/contactd.sqlite",
 		BaseURL:                     "https://contacts.example.test",
 		LogLevel:                    "debug",
-		LogFormat:                   "json",
+		LogFormat:                   "text",
 		RequestMaxBytes:             20 << 20,
 		VCardMaxBytes:               10 << 20,
 		TrustProxyHeaders:           true,
@@ -522,7 +522,7 @@ func TestLogServerStarting_IncludesEffectiveConfigSnapshot(t *testing.T) {
 		"db_path=/tmp/contactd.sqlite",
 		"base_url=https://contacts.example.test",
 		"log_level=debug",
-		"log_format=json",
+		"log_format=text",
 		"request_max_bytes=20971520",
 		"vcard_max_bytes=10485760",
 		"trust_proxy_headers=true",
@@ -537,6 +537,62 @@ func TestLogServerStarting_IncludesEffectiveConfigSnapshot(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("startup log missing %q in %q", want, out)
+		}
+	}
+}
+
+func TestLogServerStarting_JSONOmitsVerboseConfigSnapshot(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	cfg := config.ServeConfig{
+		ListenAddr:             ":18080",
+		DBPath:                 "/tmp/contactd.sqlite",
+		BaseURL:                "https://contacts.example.test",
+		LogLevel:               "debug",
+		LogFormat:              "json",
+		RequestMaxBytes:        20 << 20,
+		VCardMaxBytes:          10 << 20,
+		TrustProxyHeaders:      true,
+		ForceSeed:              true,
+		DefaultBookSlug:        "people",
+		DefaultBookName:        "People Book",
+		ChangeRetentionDays:    90,
+		PruneInterval:          12 * time.Hour,
+		EnableAddressbookColor: true,
+		AuthMaxConcurrency:     3,
+	}
+
+	logServerStarting(newServeLogger("json", "info", &buf), cfg)
+	out := buf.String()
+
+	for _, want := range []string{
+		`"msg":"server starting"`,
+		`"listen":":18080"`,
+		`"db_path":"/tmp/contactd.sqlite"`,
+		`"base_url":"https://contacts.example.test"`,
+		`"log_level":"debug"`,
+		`"log_format":"json"`,
+		`"trust_proxy_headers":true`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("json startup log missing %q in %q", want, out)
+		}
+	}
+	for _, notWant := range []string{
+		`"request_max_bytes":`,
+		`"vcard_max_bytes":`,
+		`"force_seed":`,
+		`"default_book_slug":`,
+		`"default_book_name":`,
+		`"change_retention_days":`,
+		`"change_retention_max_revisions":`,
+		`"prune_interval":`,
+		`"enable_addressbook_color":`,
+		`"auth_max_concurrency":`,
+	} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("json startup log should omit verbose config key %q in %q", notWant, out)
 		}
 	}
 }
