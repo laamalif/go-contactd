@@ -20,6 +20,8 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - No per-IP / per-username / global failed-auth throttling, no lockout window, no backoff.
 - Revalidated evidence (from TODO):
   - After `400` failed attempts for `alice`, legitimate auth still succeeded immediately.
+  - Legitimate auth remained valid immediately after a failed-auth burst (`valid_after_burst_code=404` on probe path, indicating auth success).
+  - Under parallel failed-auth spray (`24` workers), `/health` median latency rose from ~`0.0005s` to ~`0.1295s` (~`265x`), demonstrating service responsiveness degradation.
   - Chained demo: enumerate top usernames, then spray candidate passwords until a success indicator (`non-401`) is observed.
   - Fast stuffing chain demo: exact top-3 users enumerated, then password spray found a valid credential in ~`0.387s` for `18` attempts.
   - Specific spray-chain evidence:
@@ -30,7 +32,11 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
     - valid creds on nonexistent path -> `404`
     - invalid creds on nonexistent path -> `401`
     - attacker does not need a known existing resource path to verify sprayed credentials
-  - Oracle also works across methods (example `OPTIONS /not-real`: valid creds -> `204`, invalid creds -> `401`)
+  - Oracle also works across methods and arbitrary protected paths:
+    - `GET /nope`: valid `404`, invalid `401`
+    - `OPTIONS /nope`: valid `204`, invalid `401`
+    - `PROPFIND /nope`: valid `404`, invalid `401`
+    - (Earlier example also observed on `OPTIONS /not-real`: valid `204`, invalid `401`)
 - Suggested fix:
   - Add optional auth throttling / rate-limiting in the HTTP auth path (per-IP and/or per-username dimensions).
   - Consider randomized small delay or token-bucket controls.
@@ -82,7 +88,7 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 - Revalidated evidence:
   - With trust enabled, `X-Forwarded-For: 198.51.100.66, 203.0.113.9` logs `remote=198.51.100.66` (attacker-controlled first hop).
   - With trust disabled, same request logs socket remote (e.g. `127.0.0.1`).
-  - ~`200KB` XFF value produced a successful request and a ~`200KB` access-log line.
+  - ~`200KB` XFF value produced a successful request and ~`200KB` log growth (`code=200`, `log_bytes=200472`).
 - Suggested fix:
   - Support explicit trusted-proxy parsing semantics (e.g. trusted-hop count / rightmost client extraction) instead of blindly using leftmost XFF.
   - Cap/sanitize logged proxy-header values and fall back to socket remote for malformed/oversized values.
