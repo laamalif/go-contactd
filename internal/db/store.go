@@ -25,6 +25,12 @@ type Store struct {
 var ErrNotFound = errors.New("not found")
 var ErrPreconditionFailed = errors.New("precondition failed")
 
+// bcryptDummyHashDefaultCost is a valid bcrypt hash (cost=10) used to equalize
+// auth work for nonexistent usernames.
+const bcryptDummyHashDefaultCost = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+
+var bcryptCompareHashAndPassword = bcrypt.CompareHashAndPassword
+
 type TestHooks struct {
 	BeforeCardChangeInsert func() error
 }
@@ -257,11 +263,17 @@ func (s *Store) AuthenticateUser(ctx context.Context, username, password string)
 		WHERE username = ?
 	`, username).Scan(&id, &passwordHash); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			if err := bcryptCompareHashAndPassword([]byte(bcryptDummyHashDefaultCost), []byte(password)); err != nil {
+				if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+					return false, 0, nil
+				}
+				return false, 0, fmt.Errorf("compare dummy password hash: %w", err)
+			}
 			return false, 0, nil
 		}
 		return false, 0, fmt.Errorf("select auth user: %w", err)
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+	if err := bcryptCompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
 		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
 			return false, 0, nil
 		}
