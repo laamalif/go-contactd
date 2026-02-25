@@ -196,6 +196,25 @@ func TestServeHTTPGracefully_ListenFailureReturns1(t *testing.T) {
 	}
 }
 
+func TestNewHTTPServer_ConfiguresTimeouts(t *testing.T) {
+	t.Parallel()
+
+	srv := newHTTPServer(":8080", http.NewServeMux())
+
+	if got, want := srv.ReadHeaderTimeout, 5*time.Second; got != want {
+		t.Fatalf("ReadHeaderTimeout = %v, want %v", got, want)
+	}
+	if got, want := srv.ReadTimeout, 30*time.Second; got != want {
+		t.Fatalf("ReadTimeout = %v, want %v", got, want)
+	}
+	if got, want := srv.WriteTimeout, 120*time.Second; got != want {
+		t.Fatalf("WriteTimeout = %v, want %v", got, want)
+	}
+	if got, want := srv.IdleTimeout, 120*time.Second; got != want {
+		t.Fatalf("IdleTimeout = %v, want %v", got, want)
+	}
+}
+
 func TestNewServeLogger_FormatAndLevel(t *testing.T) {
 	t.Parallel()
 

@@ -59,10 +59,7 @@ func RunServeNamed(prog string, args []string, env map[string]string, stderr io.
 		"base_url", rt.cfg.BaseURL,
 	)
 
-	srv := &http.Server{
-		Addr:    rt.cfg.ListenAddr,
-		Handler: rt.handler,
-	}
+	srv := newHTTPServer(rt.cfg.ListenAddr, rt.handler)
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	stopPrune := startConfiguredPruneLoop(sigCtx, rt.store, rt.cfg, rt.logger)
@@ -75,6 +72,17 @@ type deferredLogWriter struct {
 	live   io.Writer
 	buf    []byte
 	active bool
+}
+
+func newHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 }
 
 func newDeferredLogWriter(live io.Writer) *deferredLogWriter {
