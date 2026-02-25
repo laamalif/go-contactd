@@ -529,11 +529,9 @@ func runExport(args []string, env map[string]string, stdout, stderr io.Writer) i
 	switch format {
 	case "concat":
 		if strings.TrimSpace(outPath) == "" {
-			for _, c := range cards {
-				if _, err := stdout.Write(c.VCard); err != nil {
-					_, _ = fmt.Fprintf(stderr, "internal error: %v\n", err)
-					return 1
-				}
+			if err := writeConcatExport(stdout, cards); err != nil {
+				_, _ = fmt.Fprintf(stderr, "internal error: %v\n", err)
+				return 1
 			}
 			return 0
 		}
@@ -562,10 +560,24 @@ func writeConcatExportFile(outPath string, cards []db.Card) error {
 		return fmt.Errorf("open concat export file: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	for _, c := range cards {
-		if _, err := f.Write(c.VCard); err != nil {
+	if err := writeConcatExport(f, cards); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeConcatExport(w io.Writer, cards []db.Card) error {
+	var prev []byte
+	for i, c := range cards {
+		if i > 0 && len(c.VCard) > 0 && !bytes.HasSuffix(prev, []byte("\r\n")) {
+			if _, err := w.Write([]byte("\r\n")); err != nil {
+				return fmt.Errorf("write concat export separator: %w", err)
+			}
+		}
+		if _, err := w.Write(c.VCard); err != nil {
 			return fmt.Errorf("write concat export file: %w", err)
 		}
+		prev = c.VCard
 	}
 	return nil
 }

@@ -39,6 +39,65 @@ func TestRunCLI_ExportConcat_WritesStoredVCardBytes(t *testing.T) {
 	}
 }
 
+func TestRunCLI_ExportConcat_NormalizesBoundaryBetweenCards(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "contactd.sqlite")
+	store, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	userID, err := store.CreateUser(context.Background(), "alice", "test-hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	abID, _, err := store.EnsureAddressbook(context.Background(), userID, "contacts", "Contacts")
+	if err != nil {
+		t.Fatalf("EnsureAddressbook: %v", err)
+	}
+	// No trailing CRLF on either card to reproduce invalid concat seam.
+	if _, err := store.PutCard(context.Background(), db.PutCardInput{
+		AddressbookID: abID,
+		Href:          "a.vcf",
+		UID:           "uid-a",
+		VCard:         []byte("BEGIN:VCARD\r\nFN:Alpha\r\nEND:VCARD"),
+	}); err != nil {
+		t.Fatalf("PutCard a: %v", err)
+	}
+	if _, err := store.PutCard(context.Background(), db.PutCardInput{
+		AddressbookID: abID,
+		Href:          "b.vcf",
+		UID:           "uid-b",
+		VCard:         []byte("BEGIN:VCARD\r\nFN:Beta\r\nEND:VCARD"),
+	}); err != nil {
+		t.Fatalf("PutCard b: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"export",
+		"--username", "alice",
+		"--book", "contacts",
+		"--format", "concat",
+		"-d", dbPath,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 0 {
+		t.Fatalf("code=%d want 0 stderr=%q", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr=%q want empty", stderr.String())
+	}
+	got := stdout.String()
+	if strings.Contains(got, "END:VCARDBEGIN:VCARD") {
+		t.Fatalf("invalid concat seam present: %q", got)
+	}
+	if !strings.Contains(got, "END:VCARD\r\nBEGIN:VCARD") {
+		t.Fatalf("missing normalized concat seam: %q", got)
+	}
+}
+
 func TestRunCLI_ExportDir_WritesVCardFiles(t *testing.T) {
 	t.Parallel()
 

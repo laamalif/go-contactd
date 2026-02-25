@@ -15,6 +15,8 @@ MULTICARD_SRC_DIR="${TMP_DIR}/import-multicard"
 ATOMIC_SRC_DIR="${TMP_DIR}/import-atomic"
 BAD_UID_CONCAT_FILE="${TMP_DIR}/import-bad-uid.vcf"
 OVERSIZE_CONCAT_FILE="${TMP_DIR}/import-oversize.vcf"
+SEAM_SRC_DIR="${TMP_DIR}/import-seam"
+SEAM_EXPORT_FILE="${TMP_DIR}/export-seam.vcf"
 
 cleanup() {
   docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" down -v >/dev/null 2>&1 || true
@@ -298,6 +300,21 @@ atomic_export="$(compose_exec_contactctl export --username charlie --format conc
 if [[ -n "${atomic_export}" ]]; then
   fail "failed import left partial cards persisted (concat export not empty): ${atomic_export}"
 fi
+
+log "contactctl export concat must normalize card seams for re-import"
+compose_exec_contactctl user add --username dora --password secret -d /data/contactd.sqlite >/dev/null
+mkdir -p "${SEAM_SRC_DIR}"
+printf 'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-seam-a\r\nFN:Seam A\r\nEND:VCARD' > "${SEAM_SRC_DIR}/a.vcf"
+printf 'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-seam-b\r\nFN:Seam B\r\nEND:VCARD' > "${SEAM_SRC_DIR}/b.vcf"
+docker cp "${SEAM_SRC_DIR}" "${CID}:/tmp/import-seam" >/dev/null
+compose_exec_contactctl import --username dora -d /data/contactd.sqlite /tmp/import-seam >/dev/null
+compose_exec_contactctl export --username dora --format concat --out /tmp/export-seam.vcf -d /data/contactd.sqlite >/dev/null
+docker cp "${CID}:/tmp/export-seam.vcf" "${SEAM_EXPORT_FILE}" >/dev/null
+if grep -Fq 'END:VCARDBEGIN:VCARD' "${SEAM_EXPORT_FILE}"; then
+  fail "concat export produced invalid seam"
+fi
+compose_exec_contactctl user add --username erin --password secret -d /data/contactd.sqlite >/dev/null
+compose_exec_contactctl import --username erin -d /data/contactd.sqlite /tmp/export-seam.vcf >/dev/null
 
 log "restarting container"
 docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" restart contactd

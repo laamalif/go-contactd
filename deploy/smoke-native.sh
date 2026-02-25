@@ -18,6 +18,8 @@ IMPORT_ATOMIC_DIR="${TMP_DIR}/import-atomic"
 IMPORT_BAD_UID_FILE="${TMP_DIR}/import-bad-uid.vcf"
 IMPORT_OVERSIZE_FILE="${TMP_DIR}/import-oversize.vcf"
 EXPORT_VERIFY_DIR="${TMP_DIR}/export-verify"
+IMPORT_SEAM_DIR="${TMP_DIR}/import-seam"
+EXPORT_SEAM_FILE="${TMP_DIR}/export-seam.vcf"
 
 cleanup() {
   if [[ -n "${SERVER_PID}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
@@ -284,6 +286,19 @@ rm -rf "${EXPORT_VERIFY_DIR}"
 "${ADMIN_BIN_PATH}" export --username charlie --format dir --out "${EXPORT_VERIFY_DIR}" -d "${DB_PATH}" >/dev/null
 vcf_count="$(find "${EXPORT_VERIFY_DIR}" -type f -name '*.vcf' | wc -l | tr -d ' ')"
 [[ "${vcf_count}" == "0" ]] || fail "failed import left partial cards persisted (vcf_count=${vcf_count})"
+
+log "contactctl export concat must normalize card seams for re-import"
+"${ADMIN_BIN_PATH}" user add -d "${DB_PATH}" --username dora --password secret >/dev/null
+mkdir -p "${IMPORT_SEAM_DIR}"
+printf 'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-seam-a\r\nFN:Seam A\r\nEND:VCARD' > "${IMPORT_SEAM_DIR}/a.vcf"
+printf 'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-seam-b\r\nFN:Seam B\r\nEND:VCARD' > "${IMPORT_SEAM_DIR}/b.vcf"
+"${ADMIN_BIN_PATH}" import --username dora -d "${DB_PATH}" "${IMPORT_SEAM_DIR}" >/dev/null
+"${ADMIN_BIN_PATH}" export --username dora --format concat --out "${EXPORT_SEAM_FILE}" -d "${DB_PATH}" >/dev/null
+if grep -Fq 'END:VCARDBEGIN:VCARD' "${EXPORT_SEAM_FILE}"; then
+  fail "concat export produced invalid seam"
+fi
+"${ADMIN_BIN_PATH}" user add -d "${DB_PATH}" --username erin --password secret >/dev/null
+"${ADMIN_BIN_PATH}" import --username erin -d "${DB_PATH}" "${EXPORT_SEAM_FILE}" >/dev/null
 
 log "restarting server"
 stop_server
