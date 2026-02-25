@@ -204,13 +204,7 @@ func (s *SyncService) buildPagedSyncResult(addressbookID, headRevision int64, us
 		pageItems = items[:limit]
 		remaining = append(remaining, items[limit:]...)
 	}
-	tokenRevision := headRevision
-	if truncated && len(pageItems) > 0 {
-		lastRevision := pageItems[len(pageItems)-1].Revision
-		if lastRevision < tokenRevision {
-			tokenRevision = lastRevision
-		}
-	}
+	tokenRevision := syncPageTokenRevision(headRevision, pageItems, truncated)
 	emitItems := collapseSyncPageItems(pageItems)
 	out := SyncResult{
 		SyncToken: FormatSyncToken(addressbookID, tokenRevision),
@@ -266,13 +260,7 @@ func (s *SyncService) takeCursorPage(token SyncToken, username, slug string, lim
 		pageItems = cur.Items[:limit]
 		remaining = append(remaining, cur.Items[limit:]...)
 	}
-	tokenRevision := cur.HeadRevision
-	if truncated && len(pageItems) > 0 {
-		lastRevision := pageItems[len(pageItems)-1].Revision
-		if lastRevision < tokenRevision {
-			tokenRevision = lastRevision
-		}
-	}
+	tokenRevision := syncPageTokenRevision(cur.HeadRevision, pageItems, truncated)
 	emitItems := collapseSyncPageItems(pageItems)
 	out := SyncResult{
 		SyncToken: FormatSyncToken(token.AddressbookID, tokenRevision),
@@ -315,6 +303,22 @@ func collapseSyncPageItems(items []syncPageItem) []syncPageItem {
 		out = append(out, it)
 	}
 	return out
+}
+
+func syncPageTokenRevision(headRevision int64, pageItems []syncPageItem, truncated bool) int64 {
+	if len(pageItems) == 0 {
+		return headRevision
+	}
+	lastRevision := pageItems[len(pageItems)-1].Revision
+	if truncated {
+		// Continuation tokens must advance to the last revision represented on this page.
+		return lastRevision
+	}
+	if lastRevision > headRevision {
+		// Concurrent writes can make the observed page outrun the earlier head read.
+		return lastRevision
+	}
+	return headRevision
 }
 
 func (s *SyncService) pruneExpiredCursorsLocked(now time.Time) {
