@@ -175,7 +175,14 @@ func (s *SyncService) SyncCollection(ctx context.Context, username, slug, rawTok
 	}
 	out := SyncResult{SyncToken: FormatSyncToken(ab.ID, tokenRevision)}
 	out.Truncated = tokenRevision < ab.Revision
-	for _, ch := range changes {
+	lastIdxByHref := make(map[string]int, len(changes))
+	for i, ch := range changes {
+		lastIdxByHref[ch.Href] = i
+	}
+	for i, ch := range changes {
+		if lastIdxByHref[ch.Href] != i {
+			continue
+		}
 		fullHref := "/" + username + "/" + slug + "/" + ch.Href
 		if ch.Deleted {
 			out.Deleted = append(out.Deleted, fullHref)

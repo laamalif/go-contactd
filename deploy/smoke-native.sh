@@ -196,6 +196,31 @@ token1="$(printf '%s' "${resp}" | extract_sync_token)"
 [[ -n "${token1}" ]] || fail "initial sync token missing"
 log "captured token: ${token1}"
 
+log "sync-collection delta must collapse repeated updates for one href"
+resp="$(curl -sS -i -u alice:secret -X PUT \
+  -H 'Content-Type: text/vcard; charset=utf-8' \
+  --data-binary $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-dup\r\nFN:Dup One\r\nEND:VCARD\r\n' \
+  "${BASE_URL}/alice/contacts/dup.vcf")"
+expect_status 201 "${resp}"
+resp="$(curl -sS -i -u alice:secret -X PUT \
+  -H 'Content-Type: text/vcard; charset=utf-8' \
+  --data-binary $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-dup\r\nFN:Dup Two\r\nEND:VCARD\r\n' \
+  "${BASE_URL}/alice/contacts/dup.vcf")"
+expect_status 204 "${resp}"
+resp="$(curl -sS -i -u alice:secret -X PUT \
+  -H 'Content-Type: text/vcard; charset=utf-8' \
+  --data-binary $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-dup\r\nFN:Dup Three\r\nEND:VCARD\r\n' \
+  "${BASE_URL}/alice/contacts/dup.vcf")"
+expect_status 204 "${resp}"
+resp="$(curl -sS -i -u alice:secret -X REPORT \
+  -H 'Content-Type: application/xml; charset=utf-8' \
+  --data-binary "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:sync-collection xmlns:D=\"DAV:\"><D:sync-token>${token1}</D:sync-token><D:sync-level>1</D:sync-level></D:sync-collection>" \
+  "${BASE_URL}/alice/contacts/")"
+expect_status 207 "${resp}"
+if [[ "$(printf '%s' "${resp}" | grep -o '<href>/alice/contacts/dup.vcf</href>' | wc -l | tr -d ' ')" != "1" ]]; then
+  fail "sync delta returned duplicate dup.vcf responses: ${resp}"
+fi
+
 log "cross-tenant sync-collection must be 404"
 resp="$(curl -sS -i -u bob:secret -X PUT \
   -H 'Content-Type: text/vcard; charset=utf-8' \

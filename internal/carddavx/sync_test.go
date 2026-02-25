@@ -212,6 +212,101 @@ func TestService_SyncCollection_StaleTokenAfterPruneIsInvalid(t *testing.T) {
 	}
 }
 
+func TestService_SyncCollection_DeltaCollapsesRepeatedUpdatesPerHref(t *testing.T) {
+	t.Parallel()
+
+	store := openSyncStore(t)
+	defer func() { _ = store.Close() }()
+	userID, err := store.CreateUser(context.Background(), "alice", "hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := store.CreateAddressbook(context.Background(), userID, "contacts", "Contacts"); err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+	backend := contactcarddav.NewBackend(store)
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/d.vcf", sampleCard("uid-d", "Dora v1"), &carddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject d v1: %v", err)
+	}
+
+	svc := carddavx.NewSyncService(store)
+	baseline, err := svc.SyncCollection(context.Background(), "alice", "contacts", "", 0)
+	if err != nil {
+		t.Fatalf("SyncCollection baseline: %v", err)
+	}
+
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/d.vcf", sampleCard("uid-d", "Dora v2"), &carddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject d v2: %v", err)
+	}
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/d.vcf", sampleCard("uid-d", "Dora v3"), &carddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject d v3: %v", err)
+	}
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/d.vcf", sampleCard("uid-d", "Dora v4"), &carddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject d v4: %v", err)
+	}
+
+	res, err := svc.SyncCollection(context.Background(), "alice", "contacts", baseline.SyncToken, 0)
+	if err != nil {
+		t.Fatalf("SyncCollection delta: %v", err)
+	}
+	if got := len(res.Deleted); got != 0 {
+		t.Fatalf("Deleted len = %d, want 0", got)
+	}
+	if got := len(res.Updated); got != 1 {
+		t.Fatalf("Updated len = %d, want 1 (collapsed latest only)", got)
+	}
+	if got, want := res.Updated[0].Href, "/alice/contacts/d.vcf"; got != want {
+		t.Fatalf("Updated[0].Href = %q, want %q", got, want)
+	}
+}
+
+func TestService_SyncCollection_DeltaCollapsesUpdateThenDeleteToDelete(t *testing.T) {
+	t.Parallel()
+
+	store := openSyncStore(t)
+	defer func() { _ = store.Close() }()
+	userID, err := store.CreateUser(context.Background(), "alice", "hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := store.CreateAddressbook(context.Background(), userID, "contacts", "Contacts"); err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+	backend := contactcarddav.NewBackend(store)
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/x.vcf", sampleCard("uid-x", "X v1"), &carddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject x v1: %v", err)
+	}
+
+	svc := carddavx.NewSyncService(store)
+	baseline, err := svc.SyncCollection(context.Background(), "alice", "contacts", "", 0)
+	if err != nil {
+		t.Fatalf("SyncCollection baseline: %v", err)
+	}
+
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/x.vcf", sampleCard("uid-x", "X v2"), &carddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject x v2: %v", err)
+	}
+	if err := backend.DeleteAddressObject(ctx, "/alice/contacts/x.vcf"); err != nil {
+		t.Fatalf("DeleteAddressObject x: %v", err)
+	}
+
+	res, err := svc.SyncCollection(context.Background(), "alice", "contacts", baseline.SyncToken, 0)
+	if err != nil {
+		t.Fatalf("SyncCollection delta: %v", err)
+	}
+	if got := len(res.Updated); got != 0 {
+		t.Fatalf("Updated len = %d, want 0", got)
+	}
+	if got := len(res.Deleted); got != 1 {
+		t.Fatalf("Deleted len = %d, want 1 (collapsed delete)", got)
+	}
+	if got, want := res.Deleted[0], "/alice/contacts/x.vcf"; got != want {
+		t.Fatalf("Deleted[0] = %q, want %q", got, want)
+	}
+}
+
 func openSyncStore(t *testing.T) *db.Store {
 	t.Helper()
 	store, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "contactd.sqlite"))
