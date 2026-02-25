@@ -67,27 +67,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - concat import from non-regular source is rejected (already covered; keep regression)
   - concat import total-input cap is enforced on large regular files (already covered; keep regression)
 
-### FIXME-029 (P3) `PROPPATCH` metadata fields have no per-field size caps (self-DoS / response-bloat risk)
-
-- Status: validated by code inspection
-- Impact:
-  - Authenticated users can set very large `displayname` / `addressbook-description` / `addressbook-color` values up to the request body limit (default `10 MiB`).
-  - Primary risk is self-DoS / large `PROPFIND` responses for the same user; not a cross-tenant leak.
-- Affected code:
-  - `internal/server/handler.go` (`handleProppatch`, `parseProppatchRequest`)
-- Root cause:
-  - Metadata values are accepted as strings without per-field length validation; only the overall request body limit applies.
-- Suggested fix:
-  - Add field-specific maximum lengths (for example):
-    - `displayname` small cap (e.g. `256` bytes/chars)
-    - `addressbook-description` moderate cap (e.g. `4096`)
-    - `addressbook-color` strict cap/format validation
-  - Return `400 Bad Request` on over-limit metadata values.
-- Tests to add:
-  - over-limit `displayname` / `addressbook-description` rejected with `400`
-  - valid normal-sized metadata values still persist and round-trip
-  - color over-limit / malformed values rejected (if color feature enabled)
-
 ### FIXME-030 (P3) `TrustProxyHeaders` logs attacker-controlled leftmost `X-Forwarded-For` and has no proxy-header value cap (spoofable remote identity / log amplification)
 
 - Status: validated by code inspection and live repro evidence
@@ -145,6 +124,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - `sync-collection` continuation pages remain valid across prune (fixed in `fe65dde`)
 - Large full-sync pagination continuation remains cached beyond legacy threshold (fixed in `cdfbb45`)
 - REPORT multiget body `href` control-byte validation via shared `parseCardPath` hardening (fixed in `5786e13`)
+- `PROPPATCH` metadata per-field size caps (`displayname` / description / color) (fixed in `900e520`)
 - `REPORT` XML namespace enforcement (fixed in `bfb28e8`)
 - `REPORT addressbook-multiget` target ownership/collection binding (fixed in `509b5db`)
 - `addressbook-multiget` href cap + dedupe (fixed in `bc694e9`)
