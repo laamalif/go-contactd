@@ -6,11 +6,18 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/laamalif/go-contactd/internal/db"
 )
 
 const syncTokenPrefix = "urn:contactd:sync:"
+
+const (
+	syncCursorTTL      = 2 * time.Minute
+	syncCursorMaxItems = 10000
+)
 
 type SyncToken struct {
 	AddressbookID int64
@@ -76,10 +83,26 @@ type SyncResult struct {
 
 type SyncService struct {
 	store *db.Store
+	mu    sync.Mutex
+	page  map[string]syncCursor
 }
 
 func NewSyncService(store *db.Store) *SyncService {
-	return &SyncService{store: store}
+	return &SyncService{store: store, page: make(map[string]syncCursor)}
+}
+
+type syncPageItem struct {
+	Revision int64
+	Href     string
+	ETagHex  string
+	Deleted  bool
+}
+
+type syncCursor struct {
+	AddressbookID int64
+	HeadRevision  int64
+	ExpiresAt     time.Time
+	Items         []syncPageItem
 }
 
 type CollectionState struct {
@@ -110,37 +133,22 @@ func (s *SyncService) SyncCollection(ctx context.Context, username, slug, rawTok
 	if strings.TrimSpace(rawToken) == "" {
 		stateLimit := 0
 		if limit > 0 {
-			// Ask for one extra row so we can detect truncation and emit a continuation token.
-			stateLimit = limit + 1
+			// Fetch the full state list so a truncated page can cache remaining items and survive prune between pages.
+			stateLimit = 0
 		}
 		states, err := s.store.ListCurrentCardSyncStates(ctx, ab.ID, stateLimit)
 		if err != nil {
 			return SyncResult{}, err
 		}
-		truncated := false
-		if limit > 0 && len(states) > limit {
-			truncated = true
-			states = states[:limit]
-		}
-		tokenRevision := ab.Revision
-		if truncated && len(states) > 0 {
-			lastRevision := states[len(states)-1].Revision
-			if lastRevision < tokenRevision {
-				tokenRevision = lastRevision
-			}
-		}
-		out := SyncResult{
-			SyncToken: FormatSyncToken(ab.ID, tokenRevision),
-			Updated:   make([]SyncRef, 0, len(states)),
-			Truncated: truncated,
-		}
+		items := make([]syncPageItem, 0, len(states))
 		for _, c := range states {
-			out.Updated = append(out.Updated, SyncRef{
-				Href: "/" + username + "/" + slug + "/" + c.Href,
-				ETag: `"` + c.ETagHex + `"`,
+			items = append(items, syncPageItem{
+				Revision: c.Revision,
+				Href:     c.Href,
+				ETagHex:  c.ETagHex,
 			})
 		}
-		return out, nil
+		return s.buildPagedSyncResult(ab.ID, ab.Revision, username, slug, items, limit)
 	}
 
 	token, err := ParseSyncToken(strings.TrimSpace(rawToken))
@@ -150,11 +158,20 @@ func (s *SyncService) SyncCollection(ctx context.Context, username, slug, rawTok
 	if token.AddressbookID != ab.ID {
 		return SyncResult{}, &invalidSyncTokenError{cause: fmt.Errorf("addressbook mismatch")}
 	}
+	if limit > 0 {
+		if out, ok := s.takeCursorPage(token, username, slug, limit); ok {
+			return out, nil
+		}
+	}
 	if token.Revision > ab.Revision {
 		return SyncResult{}, &invalidSyncTokenError{cause: fmt.Errorf("revision ahead")}
 	}
 
-	changes, err := s.store.ListCardChangesSince(ctx, ab.ID, token.Revision, limit)
+	changeLimit := limit
+	if limit > 0 {
+		changeLimit = 0
+	}
+	changes, err := s.store.ListCardChangesSince(ctx, ab.ID, token.Revision, changeLimit)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -166,32 +183,144 @@ func (s *SyncService) SyncCollection(ctx context.Context, username, slug, rawTok
 			return SyncResult{}, &invalidSyncTokenError{cause: fmt.Errorf("stale token")}
 		}
 	}
-	tokenRevision := ab.Revision
-	if len(changes) > 0 {
-		lastRevision := changes[len(changes)-1].Revision
+	items := make([]syncPageItem, 0, len(changes))
+	for _, ch := range changes {
+		items = append(items, syncPageItem{
+			Revision: ch.Revision,
+			Href:     ch.Href,
+			ETagHex:  ch.ETagHex,
+			Deleted:  ch.Deleted,
+		})
+	}
+	return s.buildPagedSyncResult(ab.ID, ab.Revision, username, slug, items, limit)
+}
+
+func (s *SyncService) buildPagedSyncResult(addressbookID, headRevision int64, username, slug string, items []syncPageItem, limit int) (SyncResult, error) {
+	pageItems := items
+	remaining := []syncPageItem(nil)
+	truncated := false
+	if limit > 0 && len(items) > limit {
+		truncated = true
+		pageItems = items[:limit]
+		remaining = append(remaining, items[limit:]...)
+	}
+	tokenRevision := headRevision
+	if truncated && len(pageItems) > 0 {
+		lastRevision := pageItems[len(pageItems)-1].Revision
 		if lastRevision < tokenRevision {
 			tokenRevision = lastRevision
 		}
 	}
-	out := SyncResult{SyncToken: FormatSyncToken(ab.ID, tokenRevision)}
-	out.Truncated = tokenRevision < ab.Revision
-	lastIdxByHref := make(map[string]int, len(changes))
-	for i, ch := range changes {
-		lastIdxByHref[ch.Href] = i
+	emitItems := collapseSyncPageItems(pageItems)
+	out := SyncResult{
+		SyncToken: FormatSyncToken(addressbookID, tokenRevision),
+		Updated:   make([]SyncRef, 0, len(emitItems)),
+		Deleted:   make([]string, 0, len(emitItems)),
+		Truncated: truncated,
 	}
-	for i, ch := range changes {
-		if lastIdxByHref[ch.Href] != i {
-			continue
-		}
-		fullHref := "/" + username + "/" + slug + "/" + ch.Href
-		if ch.Deleted {
+	for _, it := range emitItems {
+		fullHref := "/" + username + "/" + slug + "/" + it.Href
+		if it.Deleted {
 			out.Deleted = append(out.Deleted, fullHref)
 			continue
 		}
 		out.Updated = append(out.Updated, SyncRef{
 			Href: fullHref,
-			ETag: `"` + ch.ETagHex + `"`,
+			ETag: `"` + it.ETagHex + `"`,
+		})
+	}
+	if truncated && len(remaining) <= syncCursorMaxItems {
+		s.putCursor(out.SyncToken, syncCursor{
+			AddressbookID: addressbookID,
+			HeadRevision:  headRevision,
+			ExpiresAt:     time.Now().Add(syncCursorTTL),
+			Items:         remaining,
 		})
 	}
 	return out, nil
+}
+
+func (s *SyncService) putCursor(token string, cur syncCursor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredCursorsLocked(time.Now())
+	s.page[token] = cur
+}
+
+func (s *SyncService) takeCursorPage(token SyncToken, username, slug string, limit int) (SyncResult, bool) {
+	raw := FormatSyncToken(token.AddressbookID, token.Revision)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	s.pruneExpiredCursorsLocked(now)
+	cur, ok := s.page[raw]
+	if !ok || cur.AddressbookID != token.AddressbookID || now.After(cur.ExpiresAt) {
+		return SyncResult{}, false
+	}
+	delete(s.page, raw)
+	pageItems := cur.Items
+	remaining := []syncPageItem(nil)
+	truncated := false
+	if limit > 0 && len(cur.Items) > limit {
+		truncated = true
+		pageItems = cur.Items[:limit]
+		remaining = append(remaining, cur.Items[limit:]...)
+	}
+	tokenRevision := cur.HeadRevision
+	if truncated && len(pageItems) > 0 {
+		lastRevision := pageItems[len(pageItems)-1].Revision
+		if lastRevision < tokenRevision {
+			tokenRevision = lastRevision
+		}
+	}
+	emitItems := collapseSyncPageItems(pageItems)
+	out := SyncResult{
+		SyncToken: FormatSyncToken(token.AddressbookID, tokenRevision),
+		Updated:   make([]SyncRef, 0, len(emitItems)),
+		Deleted:   make([]string, 0, len(emitItems)),
+		Truncated: truncated,
+	}
+	for _, it := range emitItems {
+		fullHref := "/" + username + "/" + slug + "/" + it.Href
+		if it.Deleted {
+			out.Deleted = append(out.Deleted, fullHref)
+			continue
+		}
+		out.Updated = append(out.Updated, SyncRef{
+			Href: fullHref,
+			ETag: `"` + it.ETagHex + `"`,
+		})
+	}
+	if truncated && len(remaining) <= syncCursorMaxItems {
+		s.page[out.SyncToken] = syncCursor{
+			AddressbookID: token.AddressbookID,
+			HeadRevision:  cur.HeadRevision,
+			ExpiresAt:     now.Add(syncCursorTTL),
+			Items:         remaining,
+		}
+	}
+	return out, true
+}
+
+func collapseSyncPageItems(items []syncPageItem) []syncPageItem {
+	lastIdxByHref := make(map[string]int, len(items))
+	for i, it := range items {
+		lastIdxByHref[it.Href] = i
+	}
+	out := make([]syncPageItem, 0, len(items))
+	for i, it := range items {
+		if lastIdxByHref[it.Href] != i {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+func (s *SyncService) pruneExpiredCursorsLocked(now time.Time) {
+	for k, cur := range s.page {
+		if now.After(cur.ExpiresAt) {
+			delete(s.page, k)
+		}
+	}
 }

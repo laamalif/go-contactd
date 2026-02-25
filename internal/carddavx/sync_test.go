@@ -2,6 +2,7 @@ package carddavx_test
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -121,8 +122,8 @@ func TestService_SyncCollection_DeltaLimitReturnsContinuationToken(t *testing.T)
 	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/c.vcf", sampleCard("uid-c", "Carol C"), &carddav.PutAddressObjectOptions{}); err != nil {
 		t.Fatalf("PutAddressObject c: %v", err)
 	}
-	if err := backend.DeleteAddressObject(ctx, "/alice/contacts/b.vcf"); err != nil {
-		t.Fatalf("DeleteAddressObject b: %v", err)
+	if err := backend.DeleteAddressObject(ctx, "/alice/contacts/a.vcf"); err != nil {
+		t.Fatalf("DeleteAddressObject a: %v", err)
 	}
 
 	firstPage, err := svc.SyncCollection(context.Background(), "alice", "contacts", baseline.SyncToken, 2)
@@ -147,8 +148,8 @@ func TestService_SyncCollection_DeltaLimitReturnsContinuationToken(t *testing.T)
 	if len(secondPage.Updated)+len(secondPage.Deleted) != 1 {
 		t.Fatalf("page2 item count = %d, want 1 (updated=%d deleted=%d)", len(secondPage.Updated)+len(secondPage.Deleted), len(secondPage.Updated), len(secondPage.Deleted))
 	}
-	if len(secondPage.Deleted) != 1 || secondPage.Deleted[0] != "/alice/contacts/b.vcf" {
-		t.Fatalf("page2 deleted = %+v, want [/alice/contacts/b.vcf]", secondPage.Deleted)
+	if len(secondPage.Deleted) != 1 || secondPage.Deleted[0] != "/alice/contacts/a.vcf" {
+		t.Fatalf("page2 deleted = %+v, want [/alice/contacts/a.vcf]", secondPage.Deleted)
 	}
 	secondTok, err := carddavx.ParseSyncToken(secondPage.SyncToken)
 	if err != nil {
@@ -398,6 +399,60 @@ func TestService_SyncCollection_EmptyTokenFullSyncIncludesLiveCardsAfterAgePrune
 		if !containsSyncHref(res.Updated, want) {
 			t.Fatalf("missing href %q in full sync after age prune: %+v", want, res.Updated)
 		}
+	}
+}
+
+func TestService_SyncCollection_ContinuationTokenRemainsUsableAfterPrune(t *testing.T) {
+	t.Parallel()
+
+	store := openSyncStore(t)
+	defer func() { _ = store.Close() }()
+	userID, err := store.CreateUser(context.Background(), "alice", "hash")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := store.CreateAddressbook(context.Background(), userID, "contacts", "Contacts"); err != nil {
+		t.Fatalf("CreateAddressbook: %v", err)
+	}
+	backend := contactcarddav.NewBackend(store)
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/base.vcf", sampleCard("uid-base", "Base"), &carddav.PutAddressObjectOptions{}); err != nil {
+		t.Fatalf("PutAddressObject base: %v", err)
+	}
+
+	svc := carddavx.NewSyncService(store)
+	baseline, err := svc.SyncCollection(context.Background(), "alice", "contacts", "", 0)
+	if err != nil {
+		t.Fatalf("SyncCollection baseline: %v", err)
+	}
+
+	for i := 0; i < 8; i++ {
+		href := fmt.Sprintf("/alice/contacts/%02d.vcf", i)
+		uid := fmt.Sprintf("uid-%02d", i)
+		fn := fmt.Sprintf("Name %02d", i)
+		if _, err := backend.PutAddressObject(ctx, href, sampleCard(uid, fn), &carddav.PutAddressObjectOptions{}); err != nil {
+			t.Fatalf("PutAddressObject %s: %v", href, err)
+		}
+	}
+
+	page1, err := svc.SyncCollection(context.Background(), "alice", "contacts", baseline.SyncToken, 2)
+	if err != nil {
+		t.Fatalf("SyncCollection page1: %v", err)
+	}
+	if !page1.Truncated {
+		t.Fatalf("page1.Truncated = false, want true")
+	}
+
+	if _, err := store.PruneCardChangesByMaxRevisions(context.Background(), 3); err != nil {
+		t.Fatalf("PruneCardChangesByMaxRevisions: %v", err)
+	}
+
+	page2, err := svc.SyncCollection(context.Background(), "alice", "contacts", page1.SyncToken, 2)
+	if err != nil {
+		t.Fatalf("SyncCollection page2 after prune: %v", err)
+	}
+	if got := len(page2.Updated) + len(page2.Deleted); got == 0 {
+		t.Fatalf("page2 item count = %d, want >0 after prune", got)
 	}
 }
 
