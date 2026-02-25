@@ -75,31 +75,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - concat import from non-regular source is rejected (already covered; keep regression)
   - concat import total-input cap is enforced on large regular files (already covered; keep regression)
 
-### FIXME-030 (P3) `TrustProxyHeaders` logs attacker-controlled leftmost `X-Forwarded-For` and has no proxy-header value cap (spoofable remote identity / log amplification)
-
-- Status: validated by code inspection and live repro evidence
-- Impact:
-  - When `CONTACTD_TRUST_PROXY_HEADERS=true`, access logs can record an attacker-controlled remote identity if the upstream proxy chain forwards unnormalized `X-Forwarded-For`.
-  - Very large `X-Forwarded-For` / `X-Real-IP` values can amplify log volume for a single request.
-  - Primary risk is log/forensic integrity and log-volume amplification in misconfigured proxy deployments (not direct auth bypass in `contactd`).
-- Affected code:
-  - `internal/server/handler.go` (`requestRemoteForLog`, `logAccess`)
-- Root cause:
-  - `requestRemoteForLog` trusts and logs the first non-empty XFF hop verbatim.
-  - No maximum length/sanitization is applied to logged proxy-header-derived remote values.
-- Revalidated evidence:
-  - With trust enabled, `X-Forwarded-For: 198.51.100.66, 203.0.113.9` logs `remote=198.51.100.66` (attacker-controlled first hop).
-  - With trust disabled, same request logs socket remote (e.g. `127.0.0.1`).
-  - ~`200KB` XFF value produced a successful request and ~`200KB` log growth (`code=200`, `log_bytes=200472`).
-- Suggested fix:
-  - Support explicit trusted-proxy parsing semantics (e.g. trusted-hop count / rightmost client extraction) instead of blindly using leftmost XFF.
-  - Cap/sanitize logged proxy-header values and fall back to socket remote for malformed/oversized values.
-  - Optionally log a marker when proxy-header remote values are rejected.
-- Tests to add:
-  - oversized XFF does not get logged verbatim when trust mode is enabled
-  - malformed/oversized proxy header falls back to socket remote (or sanitized marker)
-  - trusted-hop parsing behavior test (if implemented)
-
 ## Already Fixed (remove from `TODO`)
 
 These findings were verified fixed in the current tree and should be deleted from `TODO`:
@@ -133,6 +108,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - Large full-sync pagination continuation remains cached beyond legacy threshold (fixed in `cdfbb45`)
 - REPORT multiget body `href` control-byte validation via shared `parseCardPath` hardening (fixed in `5786e13`)
 - `PROPPATCH` metadata per-field size caps (`displayname` / description / color) (fixed in `900e520`)
+- `TrustProxyHeaders` proxy remote logging now uses parsed rightmost XFF/X-Real-IP with header-size caps and socket fallback (fixes spoofable leftmost XFF / log amplification path) (fixed in `4e384b2`)
 - `REPORT` XML namespace enforcement (fixed in `bfb28e8`)
 - `REPORT addressbook-multiget` target ownership/collection binding (fixed in `509b5db`)
 - `addressbook-multiget` href cap + dedupe (fixed in `bc694e9`)
