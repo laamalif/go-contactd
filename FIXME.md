@@ -5,9 +5,9 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 
 ## Open Issues
 
-### FIXME-016 (P1) No auth throttling/lockout/rate-limit enables practical password spraying after enumeration
+### FIXME-016 (P1) Password spraying remains practical (auth backpressure still incomplete)
 
-- Status: validated operationally (TODO includes attack-chain repro); code inspection confirms no throttling/lockout in auth path
+- Status: partially fixed (`fb1a042` adds daemon auth concurrency cap); spraying/oracle path remains practically exploitable
 - Impact:
   - Attackers can combine `FIXME-009` (username enumeration) with unlimited online password attempts.
   - Legitimate authentication remains available after large failed-attempt bursts, enabling ongoing spraying without server-enforced delay/lockout.
@@ -17,7 +17,8 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - `internal/db/store.go` (`AuthenticateUser`)
   - `internal/daemon/daemon.go` (no auth middleware throttling/rate-limit wiring)
 - Root cause:
-  - No per-IP / per-username / global failed-auth throttling, no lockout window, no backoff.
+  - No per-IP / per-username failed-auth throttling or lockout window, and no failed-auth delay/backoff.
+  - Valid credentials still produce route-dependent non-`401` statuses on arbitrary protected paths/methods, which provides a cheap spray confirmation oracle.
 - Revalidated evidence (from TODO):
   - After `400` failed attempts for `alice`, legitimate auth still succeeded immediately.
   - Legitimate auth remained valid immediately after a failed-auth burst (`valid_after_burst_code=404` on probe path, indicating auth success).
@@ -38,12 +39,13 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
     - `PROPFIND /nope`: valid `404`, invalid `401`
     - (Earlier example also observed on `OPTIONS /not-real`: valid `204`, invalid `401`)
 - Suggested fix:
-  - Add optional auth throttling / rate-limiting in the HTTP auth path (per-IP and/or per-username dimensions).
-  - Consider randomized small delay or token-bucket controls.
+  - Keep the new auth concurrency cap (landed in `fb1a042`) as service-scope backpressure.
+  - Add minimal additional service-side mitigation (for example a uniform failed-auth delay/jitter) without turning `contactd` into a proxy/WAF.
+  - If adding throttling state, prefer lightweight in-memory controls and document proxy interaction/tradeoffs clearly.
   - Keep default behavior/operator UX in mind (document tradeoffs and trusted-proxy interactions).
 - Tests to add:
-  - Repeated failed auth attempts trigger throttle behavior (without breaking valid auth semantics)
-  - Throttle keying behavior documented and tested (direct remote vs trusted proxy mode)
+  - Failed-auth mitigation (delay/backpressure) reduces spray throughput without changing `401` semantics
+  - Legitimate auth still succeeds under failed-auth load (bounded latency regression target)
 
 ### FIXME-019 (P1) `contactctl import` still lacks full content-TOCTOU hardening for untrusted directory inputs (local admin-path tamper risk)
 
