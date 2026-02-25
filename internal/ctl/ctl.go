@@ -23,6 +23,8 @@ import (
 
 type VersionRunner func(prog string, args []string, stdout, stderr io.Writer) int
 
+var importConcatMaxBytesDefault int64 = 64 << 20 // 64 MiB total concat import source cap
+
 func RunCLI(prog string, args []string, env map[string]string, stdin io.Reader, stdout, stderr io.Writer, runVersion VersionRunner) int {
 	if len(args) == 0 {
 		printAdminUsage(stderr, prog)
@@ -858,12 +860,16 @@ func readImportRegularFileBytes(f *os.File, info os.FileInfo, maxBytes int) ([]b
 }
 
 func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID int64, path string, dryRun bool, vcardMaxBytes int) (int, int, error) {
-	f, _, err := openImportRegularFile(path)
+	f, info, err := openImportRegularFile(path)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer func() { _ = f.Close() }()
-	dec := vcard.NewDecoder(f)
+	if importConcatMaxBytesDefault > 0 && info.Size() > importConcatMaxBytesDefault {
+		return 0, 0, fmt.Errorf("import file too large: %d bytes exceeds max %d", info.Size(), importConcatMaxBytesDefault)
+	}
+	lr := &io.LimitedReader{R: f, N: importConcatMaxBytesDefault + 1}
+	dec := vcard.NewDecoder(lr)
 	var batch []db.PutCardInput
 	for {
 		card, err := dec.Decode()
@@ -892,6 +898,9 @@ func importFromConcatFile(ctx context.Context, store *db.Store, addressbookID in
 			return 0, 0, fmt.Errorf("put card %s: %w", uid, err)
 		}
 		batch = append(batch, db.PutCardInput{AddressbookID: addressbookID, Href: href, UID: uid, VCard: raw})
+	}
+	if importConcatMaxBytesDefault > 0 && lr.N <= 0 {
+		return 0, 0, fmt.Errorf("import file too large: exceeds max %d", importConcatMaxBytesDefault)
 	}
 	return applyImportedBatch(ctx, store, batch, dryRun)
 }

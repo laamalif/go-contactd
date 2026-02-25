@@ -631,6 +631,37 @@ func TestRunCLI_ImportConcatFile_InvalidUIDHrefReturnsError(t *testing.T) {
 	}
 }
 
+func TestRunCLI_ImportConcatFile_RejectsTotalInputOverCap(t *testing.T) {
+	t.Parallel()
+
+	oldCap := importConcatMaxBytesDefault
+	importConcatMaxBytesDefault = 128
+	defer func() { importConcatMaxBytesDefault = oldCap }()
+
+	dbPath := seedEmptyImportTestDB(t)
+	srcFile := filepath.Join(t.TempDir(), "contacts.vcf")
+	if err := os.WriteFile(srcFile, bytes.Repeat([]byte("X"), 256), 0o600); err != nil {
+		t.Fatalf("WriteFile contacts.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"import",
+		"--username", "alice",
+		"-d", dbPath,
+		srcFile,
+	}, map[string]string{}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 1 {
+		t.Fatalf("code=%d want 1 stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "import file too large") {
+		t.Fatalf("stderr=%q want total input cap error", got)
+	}
+}
+
 func TestRunCLI_ImportConcatFile_OversizeVCardReturnsError(t *testing.T) {
 	t.Parallel()
 
