@@ -133,6 +133,13 @@ resp="$(curl -sS -i \
 expect_status 431 "${resp}"
 assert_contains "authorization header too large" "${resp}"
 
+log "protected paths must reject control characters in segments"
+for esc in '%00' '%09' '%0A' '%0D' '%7F'; do
+  resp="$(curl -sS -i -u alice:secret "${BASE_URL}/alice/contacts/a${esc}b.vcf")"
+  expect_status 400 "${resp}"
+  assert_contains "invalid path" "${resp}"
+done
+
 log "checking well-known redirect"
 resp="$(curl -sS -i "${BASE_URL}/.well-known/carddav")"
 expect_status 308 "${resp}"
