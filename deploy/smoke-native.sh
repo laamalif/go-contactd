@@ -122,6 +122,14 @@ resp="$(curl -sS -i \
 expect_status 400 "${resp}"
 assert_contains "invalid authorization header" "${resp}"
 
+log "oversized Authorization header must be rejected"
+AUTH_BIG="Basic $(head -c 9000 /dev/zero | tr '\0' 'A')"
+resp="$(curl -sS -i \
+  -H "Authorization: ${AUTH_BIG}" \
+  "${BASE_URL}/alice/")"
+expect_status 431 "${resp}"
+assert_contains "authorization header too large" "${resp}"
+
 log "checking well-known redirect"
 resp="$(curl -sS -i "${BASE_URL}/.well-known/carddav")"
 expect_status 308 "${resp}"

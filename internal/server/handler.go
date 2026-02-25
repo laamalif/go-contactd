@@ -40,6 +40,7 @@ type HandlerOptions struct {
 }
 
 const syncServerPageLimit = 500
+const maxAuthorizationHeaderBytes = 8192
 
 func NewHandler(opts HandlerOptions) http.Handler {
 	if opts.Logger == nil {
@@ -189,6 +190,9 @@ func (h *handler) requireBasicAuth(w http.ResponseWriter, r *http.Request) (*htt
 	} else if len(values) == 1 && strings.Contains(values[0], ",") {
 		// Basic auth base64 payloads do not contain commas; reject combined header forms.
 		http.Error(w, "invalid authorization header", http.StatusBadRequest)
+		return r, false
+	} else if len(values) == 1 && len(values[0]) > maxAuthorizationHeaderBytes {
+		http.Error(w, "authorization header too large", http.StatusRequestHeaderFieldsTooLarge)
 		return r, false
 	}
 	username, password, ok := r.BasicAuth()

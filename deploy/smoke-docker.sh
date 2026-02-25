@@ -134,6 +134,13 @@ http_capture GET "${BASE_URL}/alice/" \
 expect_status 400
 assert_resp_contains "invalid authorization header"
 
+log "oversized Authorization header must be rejected"
+AUTH_BIG="Basic $(head -c 9000 /dev/zero | tr '\0' 'A')"
+http_capture GET "${BASE_URL}/alice/" \
+  -H "Authorization: ${AUTH_BIG}" >/dev/null
+expect_status 431
+assert_resp_contains "authorization header too large"
+
 log "principal discovery"
 http_capture PROPFIND "${BASE_URL}/alice/" \
   -u alice:secret \

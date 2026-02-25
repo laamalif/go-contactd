@@ -191,6 +191,32 @@ func TestHandler_ProtectedRouteRejectsDuplicateAuthorizationHeaders(t *testing.T
 	}
 }
 
+func TestHandler_ProtectedRouteRejectsOversizedAuthorizationHeader(t *testing.T) {
+	t.Parallel()
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(context.Context, string, string) (string, bool, error) {
+			t.Fatal("Authenticate should not be called when Authorization header is oversized")
+			return "", false, nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/alice/", nil)
+	req.Header.Set("Authorization", "Basic "+strings.Repeat("A", 9000))
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusRequestHeaderFieldsTooLarge; got != want {
+		t.Fatalf("status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	if got := rr.Header().Get("WWW-Authenticate"); got != "" {
+		t.Fatalf("WWW-Authenticate = %q, want empty", got)
+	}
+	if !strings.Contains(rr.Body.String(), "authorization header too large") {
+		t.Fatalf("body=%q want authorization header too large", rr.Body.String())
+	}
+}
+
 func TestHandler_AccessLog_JSON_OnePerRequestAndRequiredFields(t *testing.T) {
 	t.Parallel()
 
