@@ -490,6 +490,57 @@ func TestLogging_Format_TextAndJSON(t *testing.T) {
 	}
 }
 
+func TestLogServerStarting_IncludesEffectiveConfigSnapshot(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	cfg := config.ServeConfig{
+		ListenAddr:                  ":18080",
+		DBPath:                      "/tmp/contactd.sqlite",
+		BaseURL:                     "https://contacts.example.test",
+		LogLevel:                    "debug",
+		LogFormat:                   "json",
+		RequestMaxBytes:             20 << 20,
+		VCardMaxBytes:               10 << 20,
+		TrustProxyHeaders:           true,
+		ForceSeed:                   true,
+		DefaultBookSlug:             "people",
+		DefaultBookName:             "People Book",
+		ChangeRetentionDays:         90,
+		ChangeRetentionMaxRevisions: 1234,
+		PruneInterval:               12 * time.Hour,
+		EnableAddressbookColor:      true,
+		AuthMaxConcurrency:          3,
+	}
+
+	logServerStarting(newServeLogger("text", "info", &buf), cfg)
+	out := buf.String()
+
+	for _, want := range []string{
+		": server starting",
+		"listen=:18080",
+		"db_path=/tmp/contactd.sqlite",
+		"base_url=https://contacts.example.test",
+		"log_level=debug",
+		"log_format=json",
+		"request_max_bytes=20971520",
+		"vcard_max_bytes=10485760",
+		"trust_proxy_headers=true",
+		"force_seed=true",
+		"default_book_slug=people",
+		"default_book_name=\"People Book\"",
+		"change_retention_days=90",
+		"change_retention_max_revisions=1234",
+		"prune_interval=12h0m0s",
+		"enable_addressbook_color=true",
+		"auth_max_concurrency=3",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("startup log missing %q in %q", want, out)
+		}
+	}
+}
+
 func TestStartConfiguredPruneLoop_NilStoreIsNoop(t *testing.T) {
 	t.Parallel()
 

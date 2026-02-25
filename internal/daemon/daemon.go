@@ -48,16 +48,7 @@ func RunServeNamed(prog string, args []string, env map[string]string, stderr io.
 	_ = startupLogs.Activate()
 	defer func() { _ = rt.close() }()
 
-	rt.logger.Info(
-		"server starting",
-		"event", "server starting",
-		"listen", rt.cfg.ListenAddr,
-		"db_path", rt.cfg.DBPath,
-		"log_level", rt.cfg.LogLevel,
-		"log_format", rt.cfg.LogFormat,
-		"trust_proxy_headers", rt.cfg.TrustProxyHeaders,
-		"base_url", rt.cfg.BaseURL,
-	)
+	logServerStarting(rt.logger, rt.cfg)
 
 	srv := newHTTPServer(rt.cfg.ListenAddr, rt.handler)
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -87,6 +78,32 @@ func newHTTPServer(addr string, h http.Handler) *http.Server {
 
 func newDeferredLogWriter(live io.Writer) *deferredLogWriter {
 	return &deferredLogWriter{live: live}
+}
+
+func logServerStarting(logger *slog.Logger, cfg config.ServeConfig) {
+	if logger == nil {
+		return
+	}
+	logger.Info(
+		"server starting",
+		"event", "server starting",
+		"listen", cfg.ListenAddr,
+		"db_path", cfg.DBPath,
+		"base_url", cfg.BaseURL,
+		"log_level", cfg.LogLevel,
+		"log_format", cfg.LogFormat,
+		"trust_proxy_headers", cfg.TrustProxyHeaders,
+		"request_max_bytes", cfg.RequestMaxBytes,
+		"vcard_max_bytes", cfg.VCardMaxBytes,
+		"force_seed", cfg.ForceSeed,
+		"default_book_slug", cfg.DefaultBookSlug,
+		"default_book_name", cfg.DefaultBookName,
+		"change_retention_days", cfg.ChangeRetentionDays,
+		"change_retention_max_revisions", cfg.ChangeRetentionMaxRevisions,
+		"prune_interval", cfg.PruneInterval,
+		"enable_addressbook_color", cfg.EnableAddressbookColor,
+		"auth_max_concurrency", cfg.AuthMaxConcurrency,
+	)
 }
 
 func (w *deferredLogWriter) Write(p []byte) (int, error) {
