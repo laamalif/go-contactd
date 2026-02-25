@@ -5,42 +5,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 
 ## Open Issues
 
-### FIXME-000 (P2) `Store.PragmaString` / `Store.PragmaInt` SQL injection via PRAGMA name interpolation (internal API hardening)
-
-- Status: validated (code inspection; TODO includes working stacked-statement repros)
-- Impact:
-  - `db.Store` exposes helper methods that interpolate `name` directly into `PRAGMA %s;` SQL.
-  - Callers passing untrusted names can execute stacked statements (e.g. create/drop tables) under the DB connection.
-  - Current risk is primarily internal/maintenance-facing because these helpers are not exposed on the HTTP path, but the primitive is real.
-- Affected code:
-  - `internal/db/store.go` (`PragmaString`)
-  - `internal/db/store.go` (`PragmaInt`)
-- Root cause:
-  - `fmt.Sprintf("PRAGMA %s;", name)` with no identifier validation/allowlist.
-- Suggested fix:
-  - Do not accept arbitrary PRAGMA names.
-  - Replace with:
-    - a small allowlist of supported pragma names (`busy_timeout`, `journal_mode`, etc.), or
-    - dedicated methods per pragma needed by tests/ops.
-  - If a generic helper is retained, strictly validate `name` against an identifier regex and reject `;`, whitespace, quotes, comments.
-- Tests to add:
-  - injection payload with `;` is rejected for both `PragmaString` and `PragmaInt`
-  - valid simple pragma names still work
-
-### FIXME-001 (P2) `contactctl import` ignores configured vCard size limit
-
-- Status: validated (code inspection)
-- Impact: `contactctl import` always enforces `config.DefaultVCardMaxBytes` instead of the configured runtime limit (`CONTACTD_VCARD_MAX_BYTES`), so operator-configured size policy is not honored by admin imports.
-- Affected code:
-  - `internal/ctl/ctl.go` (`runImport`)
-  - current code hardcodes `vcardMaxBytes := int(config.DefaultVCardMaxBytes)`
-- Suggested fix:
-  - Decide config source for `contactctl import` (env only, or env + flag).
-  - Parse and validate `CONTACTD_VCARD_MAX_BYTES` (and optionally `CONTACTD_REQUEST_MAX_BYTES` parity) for `contactctl`.
-  - Use configured value instead of `config.DefaultVCardMaxBytes`.
-- Tests to add:
-  - `contactctl import` with `CONTACTD_VCARD_MAX_BYTES=1024` rejects a >1KiB card (dir and concat paths).
-
 ### FIXME-002 (P1) `REPORT addressbook-multiget` is not bound to request-target ownership/collection
 
 - Status: validated (code inspection; TODO contains multiple duplicate repro variants)
@@ -310,24 +274,6 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - page-1 continuation token remains valid across a prune tick (for chosen mitigation), or
   - explicit regression/docs test capturing current behavior if kept by design
 
-### FIXME-014 (P2) `contactctl export --format concat` can emit an invalid backup seam
-
-- Status: validated by code inspection (TODO includes reproducible evidence)
-- Impact:
-  - If stored cards do not end with a trailing newline after `END:VCARD`, concat export writes cards back-to-back with no separator, producing an invalid stream (e.g. `END:VCARDBEGIN:VCARD`) that may fail re-import.
-- Affected code:
-  - `internal/ctl/ctl.go` (`writeConcatExportFile`)
-  - upstream data path involved:
-  - `internal/db/store.go` (`CanonicalizeVCard`) normalizes line endings but does not guarantee a terminal newline
-- Root cause:
-  - Concat export writes raw stored vCards as-is with no separator normalization between cards.
-- Suggested fix:
-  - Normalize concat export boundaries by ensuring exactly one `\r\n` separator between cards (without mutating bytes within each card body).
-  - Define/export a clear contract for concat format (e.g. each card ends with CRLF).
-- Tests to add:
-  - two valid cards with no trailing newline export to a re-importable concat stream
-  - existing normal cards remain exportable/importable without duplication of blank lines
-
 ### FIXME-019 (P1) `contactctl import` lacks bounded reads and stable file handles for untrusted file inputs (local CLI DoS / TOCTOU hang risk)
 
 - Status: validated by code inspection (current-tree follow-up after symlink hardening)
@@ -424,6 +370,9 @@ These findings were verified fixed in the current tree and should be deleted fro
 - Duplicate `Authorization` header ambiguity (duplicate/comma-combined headers rejected) (fixed in `9f6e261`)
 - Oversized Basic `Authorization` header rejection (`431`) (fixed in `3d076c5`)
 - HTTP server timeout defaults (`ReadHeaderTimeout`/`ReadTimeout`/`WriteTimeout`/`IdleTimeout`) (fixed in `cb4f34e`)
+- `Store.PragmaString` / `Store.PragmaInt` PRAGMA-name validation (fixed in `48d0b25`)
+- `contactctl import` honors `CONTACTD_VCARD_MAX_BYTES` (fixed in `7344b19`)
+- `contactctl export --format concat` seam normalization (fixed in `9a12b6c`)
 
 ## Notes
 
