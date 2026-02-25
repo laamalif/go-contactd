@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/emersion/go-vcard"
@@ -686,7 +687,11 @@ func runImport(args []string, env map[string]string, stdout, stderr io.Writer) i
 		_, _ = fmt.Fprintf(stderr, "io error: stat import path: %v\n", err)
 		return 1
 	}
-	vcardMaxBytes := int(config.DefaultVCardMaxBytes)
+	vcardMaxBytes, err := importVCardMaxBytesFromEnv(env)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "usage error: %v\n", err)
+		return 2
+	}
 	var created, updated int
 	if st.IsDir() {
 		created, updated, err = importFromDir(context.Background(), store, ab.ID, srcPath, dryRun, vcardMaxBytes)
@@ -703,6 +708,24 @@ func runImport(args []string, env map[string]string, stdout, stderr io.Writer) i
 	}
 	_, _ = fmt.Fprintf(stdout, "imported: user=%s book=%s created=%d updated=%d path=%s\n", username, book, created, updated, srcPath)
 	return 0
+}
+
+func importVCardMaxBytesFromEnv(env map[string]string) (int, error) {
+	maxBytes := int(config.DefaultVCardMaxBytes)
+	if env == nil {
+		return maxBytes, nil
+	}
+	if v, ok := env["CONTACTD_VCARD_MAX_BYTES"]; ok && strings.TrimSpace(v) != "" {
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0, fmt.Errorf("invalid CONTACTD_VCARD_MAX_BYTES: %w", err)
+		}
+		if n <= 0 {
+			return 0, fmt.Errorf("invalid CONTACTD_VCARD_MAX_BYTES: must be > 0")
+		}
+		maxBytes = n
+	}
+	return maxBytes, nil
 }
 
 func importFromDir(ctx context.Context, store *db.Store, addressbookID int64, dir string, dryRun bool, vcardMaxBytes int) (int, int, error) {

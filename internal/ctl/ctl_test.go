@@ -588,6 +588,37 @@ func TestRunCLI_ImportConcatFile_OversizeVCardReturnsError(t *testing.T) {
 	}
 }
 
+func TestRunCLI_ImportConcatFile_HonorsEnvVCardMaxBytes(t *testing.T) {
+	t.Parallel()
+
+	dbPath := seedEmptyImportTestDB(t)
+	srcFile := filepath.Join(t.TempDir(), "contacts.vcf")
+	raw := "" +
+		"BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-small-limit\r\nFN:Small Limit\r\nNOTE:" + strings.Repeat("A", 256) + "\r\nEND:VCARD\r\n"
+	if err := os.WriteFile(srcFile, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile contacts.vcf: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := RunCLI("contactctl", []string{
+		"import",
+		"--username", "alice",
+		"-d", dbPath,
+		srcFile,
+	}, map[string]string{
+		"CONTACTD_VCARD_MAX_BYTES": "128",
+	}, strings.NewReader(""), &stdout, &stderr, nil)
+	if code != 1 {
+		t.Fatalf("code=%d want 1 stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "import error:") || !strings.Contains(got, "vcard too large") {
+		t.Fatalf("stderr=%q want oversize import error from env limit", got)
+	}
+}
+
 func TestRunCLI_ImportDir_InvalidVCardReturnsError(t *testing.T) {
 	t.Parallel()
 

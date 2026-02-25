@@ -17,6 +17,7 @@ IMPORT_MULTICARD_DIR="${TMP_DIR}/import-multicard"
 IMPORT_ATOMIC_DIR="${TMP_DIR}/import-atomic"
 IMPORT_BAD_UID_FILE="${TMP_DIR}/import-bad-uid.vcf"
 IMPORT_OVERSIZE_FILE="${TMP_DIR}/import-oversize.vcf"
+IMPORT_ENV_LIMIT_FILE="${TMP_DIR}/import-env-limit.vcf"
 EXPORT_VERIFY_DIR="${TMP_DIR}/export-verify"
 IMPORT_SEAM_DIR="${TMP_DIR}/import-seam"
 EXPORT_SEAM_FILE="${TMP_DIR}/export-seam.vcf"
@@ -267,6 +268,17 @@ code=$?
 set -e
 if [[ "${code}" -eq 0 ]]; then
   fail "concat import unexpectedly accepted oversized vCard: ${out}"
+fi
+assert_contains "vcard too large" "${out}"
+
+log "contactctl import must honor CONTACTD_VCARD_MAX_BYTES env limit"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-env-limit\r\nFN:Env Limit\r\nNOTE:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\nEND:VCARD\r\n' > "${IMPORT_ENV_LIMIT_FILE}"
+set +e
+out="$(CONTACTD_VCARD_MAX_BYTES=128 "${ADMIN_BIN_PATH}" import --username bob -d "${DB_PATH}" "${IMPORT_ENV_LIMIT_FILE}" 2>&1)"
+code=$?
+set -e
+if [[ "${code}" -eq 0 ]]; then
+  fail "concat import unexpectedly ignored CONTACTD_VCARD_MAX_BYTES env limit: ${out}"
 fi
 assert_contains "vcard too large" "${out}"
 

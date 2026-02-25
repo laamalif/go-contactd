@@ -15,6 +15,7 @@ MULTICARD_SRC_DIR="${TMP_DIR}/import-multicard"
 ATOMIC_SRC_DIR="${TMP_DIR}/import-atomic"
 BAD_UID_CONCAT_FILE="${TMP_DIR}/import-bad-uid.vcf"
 OVERSIZE_CONCAT_FILE="${TMP_DIR}/import-oversize.vcf"
+ENV_LIMIT_CONCAT_FILE="${TMP_DIR}/import-env-limit.vcf"
 SEAM_SRC_DIR="${TMP_DIR}/import-seam"
 SEAM_EXPORT_FILE="${TMP_DIR}/export-seam.vcf"
 
@@ -282,6 +283,18 @@ if [[ "${code}" -eq 0 ]]; then
   fail "concat import unexpectedly accepted oversized vCard: ${out}"
 fi
 printf '%s' "${out}" | grep -Fq "vcard too large" || fail "missing oversize error: ${out}"
+
+log "contactctl import must honor CONTACTD_VCARD_MAX_BYTES env limit"
+printf '%s' $'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-env-limit\r\nFN:Env Limit\r\nNOTE:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\nEND:VCARD\r\n' > "${ENV_LIMIT_CONCAT_FILE}"
+docker cp "${ENV_LIMIT_CONCAT_FILE}" "${CID}:/tmp/import-env-limit.vcf" >/dev/null
+set +e
+out="$(docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T -e CONTACTD_VCARD_MAX_BYTES=128 contactd /contactctl import --username bob -d /data/contactd.sqlite /tmp/import-env-limit.vcf 2>&1)"
+code=$?
+set -e
+if [[ "${code}" -eq 0 ]]; then
+  fail "concat import unexpectedly ignored CONTACTD_VCARD_MAX_BYTES env limit: ${out}"
+fi
+printf '%s' "${out}" | grep -Fq "vcard too large" || fail "missing env-limit oversize error: ${out}"
 
 log "contactctl import failure must be atomic (no partial commit)"
 compose_exec_contactctl user add --username charlie --password secret -d /data/contactd.sqlite >/dev/null
