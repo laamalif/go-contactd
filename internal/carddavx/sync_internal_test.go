@@ -47,3 +47,88 @@ func TestTakeCursorPage_AdvancesTokenWhenCursorHeadLagsObservedChanges(t *testin
 		t.Fatalf("SyncToken = %q, want %q", got, want)
 	}
 }
+
+func TestPutCursor_EnforcesGlobalCacheCaps(t *testing.T) {
+	t.Parallel()
+
+	oldMaxEntries := syncCursorCacheMaxEntries
+	oldMaxItems := syncCursorCacheMaxTotalItems
+	syncCursorCacheMaxEntries = 3
+	syncCursorCacheMaxTotalItems = 5
+	defer func() {
+		syncCursorCacheMaxEntries = oldMaxEntries
+		syncCursorCacheMaxTotalItems = oldMaxItems
+	}()
+
+	svc := &SyncService{page: make(map[string]syncCursor)}
+	now := time.Now()
+	for i := 0; i < 6; i++ {
+		svc.putCursor(FormatSyncToken(1, int64(i+1)), syncCursor{
+			AddressbookID: 1,
+			HeadRevision:  int64(i + 1),
+			ExpiresAt:     now.Add(time.Duration(i+1) * time.Minute),
+			Items: []syncPageItem{
+				{Revision: int64(i + 1), Href: "a.vcf"},
+				{Revision: int64(i + 1), Href: "b.vcf"},
+			},
+		})
+	}
+	if got := len(svc.page); got > syncCursorCacheMaxEntries {
+		t.Fatalf("cursor entries=%d exceeds cap=%d", got, syncCursorCacheMaxEntries)
+	}
+	if got := countCachedSyncItems(svc.page); got > syncCursorCacheMaxTotalItems {
+		t.Fatalf("cached items=%d exceeds cap=%d", got, syncCursorCacheMaxTotalItems)
+	}
+}
+
+func TestTakeCursorPage_ReinsertedContinuationEnforcesGlobalCacheCaps(t *testing.T) {
+	t.Parallel()
+
+	oldMaxEntries := syncCursorCacheMaxEntries
+	oldMaxItems := syncCursorCacheMaxTotalItems
+	syncCursorCacheMaxEntries = 1
+	syncCursorCacheMaxTotalItems = 2
+	defer func() {
+		syncCursorCacheMaxEntries = oldMaxEntries
+		syncCursorCacheMaxTotalItems = oldMaxItems
+	}()
+
+	now := time.Now()
+	svc := &SyncService{
+		page: map[string]syncCursor{
+			FormatSyncToken(1, 1): {
+				AddressbookID: 1,
+				HeadRevision:  5,
+				ExpiresAt:     now.Add(time.Minute),
+				Items: []syncPageItem{
+					{Revision: 2, Href: "a.vcf"},
+					{Revision: 3, Href: "b.vcf"},
+					{Revision: 4, Href: "c.vcf"},
+					{Revision: 5, Href: "d.vcf"},
+				},
+			},
+		},
+	}
+
+	out, ok := svc.takeCursorPage(SyncToken{AddressbookID: 1, Revision: 1}, "alice", "contacts", 1)
+	if !ok {
+		t.Fatal("takeCursorPage ok=false, want true")
+	}
+	if !out.Truncated {
+		t.Fatal("out.Truncated=false, want true")
+	}
+	if got := len(svc.page); got > syncCursorCacheMaxEntries {
+		t.Fatalf("cursor entries=%d exceeds cap=%d", got, syncCursorCacheMaxEntries)
+	}
+	if got := countCachedSyncItems(svc.page); got > syncCursorCacheMaxTotalItems {
+		t.Fatalf("cached items=%d exceeds cap=%d", got, syncCursorCacheMaxTotalItems)
+	}
+}
+
+func countCachedSyncItems(m map[string]syncCursor) int {
+	total := 0
+	for _, cur := range m {
+		total += len(cur.Items)
+	}
+	return total
+}

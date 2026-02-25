@@ -19,6 +19,12 @@ const (
 	syncCursorMaxItems = 10000
 )
 
+var (
+	// Global cache caps bound authenticated memory use across all paginated sync cursors.
+	syncCursorCacheMaxEntries    = 256
+	syncCursorCacheMaxTotalItems = 200000
+)
+
 type SyncToken struct {
 	AddressbookID int64
 	Revision      int64
@@ -237,8 +243,7 @@ func (s *SyncService) buildPagedSyncResult(addressbookID, headRevision int64, us
 func (s *SyncService) putCursor(token string, cur syncCursor) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pruneExpiredCursorsLocked(time.Now())
-	s.page[token] = cur
+	s.putCursorLocked(token, cur, time.Now())
 }
 
 func (s *SyncService) takeCursorPage(token SyncToken, username, slug string, limit int) (SyncResult, bool) {
@@ -280,12 +285,12 @@ func (s *SyncService) takeCursorPage(token SyncToken, username, slug string, lim
 		})
 	}
 	if truncated && len(remaining) <= syncCursorMaxItems {
-		s.page[out.SyncToken] = syncCursor{
+		s.putCursorLocked(out.SyncToken, syncCursor{
 			AddressbookID: token.AddressbookID,
 			HeadRevision:  cur.HeadRevision,
 			ExpiresAt:     now.Add(syncCursorTTL),
 			Items:         remaining,
-		}
+		}, now)
 	}
 	return out, true
 }
@@ -327,4 +332,66 @@ func (s *SyncService) pruneExpiredCursorsLocked(now time.Time) {
 			delete(s.page, k)
 		}
 	}
+}
+
+func (s *SyncService) putCursorLocked(token string, cur syncCursor, now time.Time) {
+	if s.page == nil {
+		s.page = make(map[string]syncCursor)
+	}
+	s.pruneExpiredCursorsLocked(now)
+
+	if syncCursorCacheMaxTotalItems > 0 && len(cur.Items) > syncCursorCacheMaxTotalItems {
+		// Refuse to cache a single cursor that exceeds the total cache budget.
+		return
+	}
+
+	s.page[token] = cur
+	s.evictCursorsToCapLocked()
+}
+
+func (s *SyncService) evictCursorsToCapLocked() {
+	for {
+		if !s.cursorCacheOverCapLocked() {
+			return
+		}
+		victim, ok := s.oldestCursorKeyLocked()
+		if !ok {
+			return
+		}
+		delete(s.page, victim)
+	}
+}
+
+func (s *SyncService) cursorCacheOverCapLocked() bool {
+	if syncCursorCacheMaxEntries > 0 && len(s.page) > syncCursorCacheMaxEntries {
+		return true
+	}
+	if syncCursorCacheMaxTotalItems > 0 && s.countCursorItemsLocked() > syncCursorCacheMaxTotalItems {
+		return true
+	}
+	return false
+}
+
+func (s *SyncService) countCursorItemsLocked() int {
+	total := 0
+	for _, cur := range s.page {
+		total += len(cur.Items)
+	}
+	return total
+}
+
+func (s *SyncService) oldestCursorKeyLocked() (string, bool) {
+	var (
+		bestKey string
+		bestExp time.Time
+		ok      bool
+	)
+	for k, cur := range s.page {
+		if !ok || cur.ExpiresAt.Before(bestExp) || (cur.ExpiresAt.Equal(bestExp) && k < bestKey) {
+			bestKey = k
+			bestExp = cur.ExpiresAt
+			ok = true
+		}
+	}
+	return bestKey, ok
 }
