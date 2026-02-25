@@ -66,6 +66,70 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
   - concat import from non-regular source is rejected (already covered; keep regression)
   - concat import total-input cap is enforced on large regular files (already covered; keep regression)
 
+### FIXME-028 (P3) REPORT `addressbook-multiget` body `href` values are not validated for control bytes before path parsing
+
+- Status: validated by code inspection (user repro/evidence consistent)
+- Impact:
+  - No data leak expected (stored card hrefs cannot contain control bytes through normal PUT path validation).
+  - Malformed body `href` values (for example `%00`) can flow into multiget processing and trigger broken response handling (likely XML marshal failure / `500`) instead of clean per-item `404` or `400`.
+  - Can produce invalid/misleading `href` handling for strict clients.
+- Affected code:
+  - `internal/server/handler.go` (`handleAddressbookMultiGet`, `parseCardPath`)
+- Root cause:
+  - URL path payload validation (`validateRequestPathPayload`) is applied only to `r.URL`, not to `REPORT` body `href` values.
+  - `parseCardPath` percent-decodes via `url.Parse` but does not reject control bytes in decoded segments.
+- Suggested fix:
+  - Apply decoded-segment control-byte validation to multiget `href` body values before `parseCardPath`, or
+  - make `parseCardPath` reject control bytes directly (preferred shared hardening).
+- Tests to add:
+  - multiget `href` with `%00`, `%09`, `%0A`, `%0D`, `%7F` is rejected or yields safe per-item failure without `500`
+
+### FIXME-029 (P3) `PROPPATCH` metadata fields have no per-field size caps (self-DoS / response-bloat risk)
+
+- Status: validated by code inspection
+- Impact:
+  - Authenticated users can set very large `displayname` / `addressbook-description` / `addressbook-color` values up to the request body limit (default `10 MiB`).
+  - Primary risk is self-DoS / large `PROPFIND` responses for the same user; not a cross-tenant leak.
+- Affected code:
+  - `internal/server/handler.go` (`handleProppatch`, `parseProppatchRequest`)
+- Root cause:
+  - Metadata values are accepted as strings without per-field length validation; only the overall request body limit applies.
+- Suggested fix:
+  - Add field-specific maximum lengths (for example):
+    - `displayname` small cap (e.g. `256` bytes/chars)
+    - `addressbook-description` moderate cap (e.g. `4096`)
+    - `addressbook-color` strict cap/format validation
+  - Return `400 Bad Request` on over-limit metadata values.
+- Tests to add:
+  - over-limit `displayname` / `addressbook-description` rejected with `400`
+  - valid normal-sized metadata values still persist and round-trip
+  - color over-limit / malformed values rejected (if color feature enabled)
+
+### FIXME-030 (P3) `TrustProxyHeaders` logs attacker-controlled leftmost `X-Forwarded-For` and has no proxy-header value cap (spoofable remote identity / log amplification)
+
+- Status: validated by code inspection and live repro evidence
+- Impact:
+  - When `CONTACTD_TRUST_PROXY_HEADERS=true`, access logs can record an attacker-controlled remote identity if the upstream proxy chain forwards unnormalized `X-Forwarded-For`.
+  - Very large `X-Forwarded-For` / `X-Real-IP` values can amplify log volume for a single request.
+  - Primary risk is log/forensic integrity and log-volume amplification in misconfigured proxy deployments (not direct auth bypass in `contactd`).
+- Affected code:
+  - `internal/server/handler.go` (`requestRemoteForLog`, `logAccess`)
+- Root cause:
+  - `requestRemoteForLog` trusts and logs the first non-empty XFF hop verbatim.
+  - No maximum length/sanitization is applied to logged proxy-header-derived remote values.
+- Revalidated evidence:
+  - With trust enabled, `X-Forwarded-For: 198.51.100.66, 203.0.113.9` logs `remote=198.51.100.66` (attacker-controlled first hop).
+  - With trust disabled, same request logs socket remote (e.g. `127.0.0.1`).
+  - ~`200KB` XFF value produced a successful request and a ~`200KB` access-log line.
+- Suggested fix:
+  - Support explicit trusted-proxy parsing semantics (e.g. trusted-hop count / rightmost client extraction) instead of blindly using leftmost XFF.
+  - Cap/sanitize logged proxy-header values and fall back to socket remote for malformed/oversized values.
+  - Optionally log a marker when proxy-header remote values are rejected.
+- Tests to add:
+  - oversized XFF does not get logged verbatim when trust mode is enabled
+  - malformed/oversized proxy header falls back to socket remote (or sanitized marker)
+  - trusted-hop parsing behavior test (if implemented)
+
 ## Already Fixed (remove from `TODO`)
 
 These findings were verified fixed in the current tree and should be deleted from `TODO`:
