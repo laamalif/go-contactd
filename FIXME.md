@@ -62,30 +62,73 @@ Items already fixed are listed at the bottom so they can be removed from `TODO`.
 
 - Status: partially fixed (`f03d63b`); remaining risk validated by code inspection and TODO repro evidence
 - Impact:
-  - `contactctl import` still lacks a total-input bound for concat mode and can spend unbounded decode/read work on large regular files.
   - Directory import can also ingest tampered content that was not present at initial directory snapshot (regular-file content swap race).
   - This is a local/admin-path availability issue, not a remote HTTP issue.
 - Affected code:
   - `internal/ctl/ctl.go` (`importFromDir`)
   - `internal/ctl/ctl.go` (`importFromConcatFile`)
 - Root cause:
-  - Remaining concat mode streams from a regular file handle into `vcard.NewDecoder(...)` with no total-input `io.LimitedReader` / byte cap for the overall stream.
   - Directory mode still enumerates names and later opens by path; content can change between directory snapshot and later open/read (regular-file content TOCTOU), even though file-type/symlink checks are improved.
 - Partial fixes already applied:
   - `89d03cf`: rejects symlink/non-regular dir import entries via path checks
   - `f03d63b`: opens import files via stable handle, revalidates opened descriptor type, rejects non-regular concat sources, and bounds dir-mode file reads before full load
+  - `3af97ee`: adds total-input cap for concat import sources (default `64 MiB`) and bounded decode reader
 - Revalidated evidence (from TODO):
   - Regular-file swap race changed imported content while import still exited success (`race_benign=0`, `race_evil=1`), demonstrating content TOCTOU.
 - Suggested fix:
-  - Concat mode: wrap input with a bounded reader (or enforce a total input cap / per-card cap during decode).
   - Optional stronger dir-mode hardening:
     - use directory FD + openat-style workflow (or equivalent) to reduce name-to-content TOCTOU surface further
     - hash/mtime/inode revalidation strategy if snapshot consistency is desired
 - Tests to add:
   - oversized regular `.vcf` in dir mode is rejected without reading entire file into memory (best-effort behavioral test)
   - dir import regular-file content swap cannot alter imported bytes after snapshot/open (best-effort deterministic harness)
-  - concat import from non-regular source is rejected (or bounded) deterministically
-  - concat import total-input cap is enforced on large regular files
+  - concat import from non-regular source is rejected (already covered; keep regression)
+  - concat import total-input cap is enforced on large regular files (already covered; keep regression)
+
+### FIXME-024 (P1) Large full-sync pagination can still fail after prune when continuation cursor cache is skipped
+
+- Status: validated by code inspection and user repro evidence
+- Impact:
+  - `sync-collection` with empty token and `nresults` can return a truncated first page, then reject the server-issued continuation token on page 2 after journal prune.
+  - New/reset clients syncing large addressbooks can fail mid-bootstrap under normal prune operation and may churn into full-resync retries.
+- Affected code:
+  - `internal/carddavx/sync.go` (`buildPagedSyncResult`, `SyncCollection`)
+  - `internal/db/store.go` (`ListCurrentCardSyncStates`)
+- Root cause:
+  - Full-sync pagination relies on the in-memory continuation cursor cache when `len(remaining) <= syncCursorMaxItems`.
+  - For large addressbooks (`remaining > syncCursorMaxItems`), no cursor is stored and page-2 falls back to journal delta lookup (`ListCardChangesSince`).
+  - After prune (especially post-prune full-sync states with revision `0`), that fallback can hit the stale-token path and reject the just-issued continuation token.
+- Revalidated evidence (from user repro):
+  - Failing case: `n=10060`, prune all `card_changes`, empty-token sync with `limit=50`
+    - page1 `truncated=true`, token `urn:contactd:sync:1:0`
+    - page2 with that token -> `invalid sync token: stale token`
+  - Control case: `n=10030` (below cache threshold), page2 succeeds
+- Suggested fix:
+  - Preserve continuation state for full-sync pagination even when remaining items exceed `syncCursorMaxItems` (chunked cursor storage / paged cursor references / alternate full-sync continuation path).
+  - Avoid falling back to journal delta semantics for a full-sync continuation token issued from a truncated empty-token response.
+- Tests to add:
+  - deterministic service test with >`syncCursorMaxItems` full-sync items, prune between pages, page2 continuation still succeeds
+  - HTTP-level regression for `REPORT sync-collection` empty-token pagination > cache threshold (optional; may be heavy)
+
+### FIXME-026 (P1) `sync-collection` continuation cursor cache has no hard size cap/eviction and can grow unbounded under authenticated load
+
+- Status: validated by code inspection and user repro evidence
+- Impact:
+  - Authenticated clients can create many distinct paginated sync cursors, causing unbounded in-memory growth (`s.page` map and cached items) until TTL expiry.
+  - This can become a memory-DoS vector even after multiget fan-out hardening.
+- Affected code:
+  - `internal/carddavx/sync.go` (`putCursor`, `takeCursorPage`, `SyncService.page`)
+- Root cause:
+  - Cursor entries expire by TTL only; there is no global entry cap, item cap across all cursors, or eviction policy.
+  - `syncCursorMaxItems` limits items per cursor, not total cache memory.
+- Revalidated evidence (from user repro):
+  - Crafted token requests drove cache to `cursor_entries=1000`, `total_cached_items=1000000`
+- Suggested fix:
+  - Add global cursor cache limits (entry count and/or total cached items) with eviction (e.g. oldest-first / nearest-expiry).
+  - Consider refusing to cache new cursors when limits are exceeded and return non-paginated fallback behavior safely.
+- Tests to add:
+  - deterministic cache growth test enforces max entries/items and eviction behavior
+  - pagination still works for recent cursors after eviction pressure
 
 ## Already Fixed (remove from `TODO`)
 
@@ -110,6 +153,7 @@ These findings were verified fixed in the current tree and should be deleted fro
 - `sync-collection` token non-advancing race under concurrent writes (fixed in `ae7d895`)
 - `contactctl export --format dir` hardlink/TOCTOU clobber in attacker-controlled output directory (fixed in `1315505`)
 - `contactctl import --dry-run` advisory/non-snapshot semantics documented in help (fixed in `cdd08dd`)
+- `REPORT address-data` bytes now use raw vCard bytes to match advertised `getetag` (fixed in `fcbb843`)
 - `sync-collection` delta per-href collapse (duplicates / contradictory states) (fixed in `d97e4c8`)
 - Full `sync-collection` bootstrap includes live cards after journal prune (fixed in `213697e`)
 - `sync-collection` continuation pages remain valid across prune (fixed in `fe65dde`)
