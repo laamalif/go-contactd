@@ -127,6 +127,13 @@ wait_for_200 "/health"
 log "creating second user for cross-tenant checks"
 compose_exec_contactctl user add --username bob --password secret -d /data/contactd.sqlite >/dev/null
 
+log "duplicate Authorization headers must be rejected"
+http_capture GET "${BASE_URL}/alice/" \
+  -H 'Authorization: Basic YWxpY2U6YmFk' \
+  -H 'Authorization: Basic Ym9iOnNlY3JldA==' >/dev/null
+expect_status 400
+assert_resp_contains "invalid authorization header"
+
 log "principal discovery"
 http_capture PROPFIND "${BASE_URL}/alice/" \
   -u alice:secret \

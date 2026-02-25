@@ -183,6 +183,14 @@ func isPublicPath(p string) bool {
 }
 
 func (h *handler) requireBasicAuth(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+	if values := r.Header.Values("Authorization"); len(values) > 1 {
+		http.Error(w, "invalid authorization header", http.StatusBadRequest)
+		return r, false
+	} else if len(values) == 1 && strings.Contains(values[0], ",") {
+		// Basic auth base64 payloads do not contain commas; reject combined header forms.
+		http.Error(w, "invalid authorization header", http.StatusBadRequest)
+		return r, false
+	}
 	username, password, ok := r.BasicAuth()
 	if !ok {
 		writeBasicChallenge(w)

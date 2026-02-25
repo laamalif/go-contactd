@@ -162,6 +162,35 @@ func TestHandler_ProtectedRouteAcceptsValidBasicAuth(t *testing.T) {
 	}
 }
 
+func TestHandler_ProtectedRouteRejectsDuplicateAuthorizationHeaders(t *testing.T) {
+	t.Parallel()
+
+	h := server.NewHandler(server.HandlerOptions{
+		Authenticate: func(context.Context, string, string) (string, bool, error) {
+			t.Fatal("Authenticate should not be called when duplicate Authorization headers are present")
+			return "", false, nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/alice/", nil)
+	req.Header["Authorization"] = []string{
+		"Basic YWxpY2U6YmFk",     // alice:bad
+		"Basic Ym9iOnNlY3JldA==", // bob:secret
+	}
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+	if got := rr.Header().Get("WWW-Authenticate"); got != "" {
+		t.Fatalf("WWW-Authenticate = %q, want empty", got)
+	}
+	if !strings.Contains(rr.Body.String(), "invalid authorization header") {
+		t.Fatalf("body=%q want invalid authorization header", rr.Body.String())
+	}
+}
+
 func TestHandler_AccessLog_JSON_OnePerRequestAndRequiredFields(t *testing.T) {
 	t.Parallel()
 

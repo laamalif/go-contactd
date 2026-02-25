@@ -114,6 +114,14 @@ log "creating user via CLI"
 log "creating second user for cross-tenant checks"
 "${ADMIN_BIN_PATH}" user add -d "${DB_PATH}" --username bob --password secret >/dev/null
 
+log "duplicate Authorization headers must be rejected"
+resp="$(curl -sS -i \
+  -H 'Authorization: Basic YWxpY2U6YmFk' \
+  -H 'Authorization: Basic Ym9iOnNlY3JldA==' \
+  "${BASE_URL}/alice/")"
+expect_status 400 "${resp}"
+assert_contains "invalid authorization header" "${resp}"
+
 log "checking well-known redirect"
 resp="$(curl -sS -i "${BASE_URL}/.well-known/carddav")"
 expect_status 308 "${resp}"
