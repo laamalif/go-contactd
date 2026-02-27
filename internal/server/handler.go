@@ -829,8 +829,8 @@ func parseMkcolRequest(body io.Reader) (mkcolRequest, error) {
 		case xml.StartElement:
 			if !rootSeen {
 				rootSeen = true
-				if t.Name.Local != "mkcol" {
-					return mkcolRequest{}, fmt.Errorf("unexpected root %q", t.Name.Local)
+				if t.Name.Local != "mkcol" || t.Name.Space != davxml.NamespaceDAV {
+					return mkcolRequest{}, fmt.Errorf("unexpected root %s:%s", t.Name.Space, t.Name.Local)
 				}
 				continue
 			}
@@ -1574,7 +1574,7 @@ func (h *handler) handleCardPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 		return
 	}
-	card, err := vcard.NewDecoder(bytes.NewReader(raw)).Decode()
+	card, err := decodeSingleCardForPut(raw)
 	if err != nil {
 		http.Error(w, "invalid vcard", http.StatusBadRequest)
 		return
@@ -1707,6 +1707,87 @@ func parseCardPath(p string) (user, slug, href string, ok bool) {
 		return "", "", "", false
 	}
 	return parts[0], parts[1], parts[2], true
+}
+
+func decodeSingleCardForPut(raw []byte) (vcard.Card, error) {
+	if err := validateVCardPayloadBytes(raw); err != nil {
+		return nil, err
+	}
+	if err := validateSingleVCardEnvelope(raw); err != nil {
+		return nil, err
+	}
+	dec := vcard.NewDecoder(bytes.NewReader(raw))
+	card, err := dec.Decode()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := dec.Decode(); err != nil {
+		if !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+	} else {
+		return nil, fmt.Errorf("multiple vcards in request body")
+	}
+	if err := validateSingleUIDProperty(card); err != nil {
+		return nil, err
+	}
+	return card, nil
+}
+
+func validateVCardPayloadBytes(raw []byte) error {
+	for _, b := range raw {
+		if (b < 0x20 && b != '\t' && b != '\n' && b != '\r') || b == 0x7f {
+			return fmt.Errorf("control byte in vcard payload")
+		}
+	}
+	return nil
+}
+
+func validateSingleVCardEnvelope(raw []byte) error {
+	norm := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	norm = strings.ReplaceAll(norm, "\r", "\n")
+	lines := strings.Split(norm, "\n")
+
+	seenBegin := false
+	seenEnd := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !seenBegin {
+			if trimmed == "" {
+				continue
+			}
+			if strings.EqualFold(trimmed, "BEGIN:VCARD") {
+				seenBegin = true
+				continue
+			}
+			return fmt.Errorf("unexpected data before BEGIN:VCARD")
+		}
+		if !seenEnd {
+			if strings.EqualFold(trimmed, "END:VCARD") {
+				seenEnd = true
+			}
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		return fmt.Errorf("unexpected trailing data after END:VCARD")
+	}
+	if !seenBegin || !seenEnd {
+		return fmt.Errorf("missing BEGIN:VCARD/END:VCARD envelope")
+	}
+	return nil
+}
+
+func validateSingleUIDProperty(card vcard.Card) error {
+	values := card.Values(vcard.FieldUID)
+	if len(values) != 1 {
+		return fmt.Errorf("expected exactly one UID")
+	}
+	if strings.TrimSpace(values[0]) == "" {
+		return fmt.Errorf("missing UID")
+	}
+	return nil
 }
 
 func hasASCIIControl(s string) bool {

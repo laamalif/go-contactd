@@ -229,9 +229,9 @@ func (b *Backend) putAddressObject(ctx context.Context, p string, card vcard.Car
 		return nil, false, err
 	}
 
-	uid := strings.TrimSpace(card.PreferredValue(vcard.FieldUID))
-	if uid == "" {
-		return nil, false, webdav.NewHTTPError(http.StatusBadRequest, fmt.Errorf("missing UID"))
+	uid, err := strictUIDFromCard(card)
+	if err != nil {
+		return nil, false, webdav.NewHTTPError(http.StatusBadRequest, err)
 	}
 	raw, err := encodeCard(card)
 	if err != nil {
@@ -335,6 +335,18 @@ func encodeCard(card vcard.Card) ([]byte, error) {
 
 func decodeCard(raw []byte) (vcard.Card, error) {
 	return vcard.NewDecoder(bytes.NewReader(raw)).Decode()
+}
+
+func strictUIDFromCard(card vcard.Card) (string, error) {
+	values := card.Values(vcard.FieldUID)
+	if len(values) != 1 {
+		return "", fmt.Errorf("expected exactly one UID")
+	}
+	uid := strings.TrimSpace(values[0])
+	if uid == "" {
+		return "", fmt.Errorf("missing UID")
+	}
+	return uid, nil
 }
 
 func checkConditional(existing *db.Card, opts *gocarddav.PutAddressObjectOptions) error {

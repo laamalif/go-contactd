@@ -771,6 +771,34 @@ func TestHandler_Mkcol_ParsesBodyMetadata(t *testing.T) {
 	}
 }
 
+func TestHandler_Mkcol_RejectsNonDAVRootNamespace(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := newAuthedHandlerForTests(backend)
+
+	reqBody := `<?xml version="1.0" encoding="utf-8"?>
+<X:mkcol xmlns:X="urn:not-dav" xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:set>
+    <D:prop>
+      <D:resourcetype><D:collection/><C:addressbook/></D:resourcetype>
+      <D:displayname>Invalid Root</D:displayname>
+    </D:prop>
+  </D:set>
+</X:mkcol>`
+	req := httptest.NewRequest("MKCOL", "/alice/friends-invalid-root/", bytes.NewBufferString(reqBody))
+	req.SetBasicAuth("alice", "secret")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("MKCOL non-DAV root namespace status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+}
+
 func TestHandler_AddressbookDelete_RoutesToBackend(t *testing.T) {
 	t.Parallel()
 
@@ -1344,6 +1372,126 @@ func TestHandler_CardPut_InvalidVCard_Returns400(t *testing.T) {
 
 	if got, want := rr.Code, http.StatusBadRequest; got != want {
 		t.Fatalf("PUT invalid vcard status = %d, want %d", got, want)
+	}
+}
+
+func TestHandler_CardPut_DuplicateUIDFieldsRejected(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	body := "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-a\r\nUID:uid-b\r\nFN:Alice\r\nEND:VCARD\r\n"
+	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/a.vcf", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "text/vcard")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("PUT duplicate UID status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+}
+
+func TestHandler_CardPut_MultiCardPayloadRejected(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	body := vcardBody("uid-a", "Alice A") + vcardBody("uid-b", "Alice B")
+	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/a.vcf", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "text/vcard")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("PUT multi-card payload status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+}
+
+func TestHandler_CardPut_TrailingGarbageRejected(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	body := vcardBody("uid-a", "Alice A") + "GARBAGE\r\n"
+	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/a.vcf", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "text/vcard")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("PUT trailing garbage status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+}
+
+func TestHandler_CardPut_ControlByteInPayloadRejected(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	body := "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-good\x00bad\r\nFN:Alice\x00Ctrl\r\nEND:VCARD\r\n"
+	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/ctrl.vcf", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "text/vcard")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusBadRequest; got != want {
+		t.Fatalf("PUT control-byte payload status = %d, want %d body=%q", got, want, rr.Body.String())
 	}
 }
 

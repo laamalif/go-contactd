@@ -137,6 +137,27 @@ func TestBackend_PutAddressObject_UIDConflict(t *testing.T) {
 	}
 }
 
+func TestBackend_PutAddressObject_DuplicateUIDRejected(t *testing.T) {
+	t.Parallel()
+
+	store := openBackendStore(t)
+	defer func() { _ = store.Close() }()
+	seedUserAndBook(t, store, "alice", "contacts", "Contacts")
+
+	backend := contactcarddav.NewBackend(store)
+	ctx := contactcarddav.WithPrincipal(context.Background(), "alice")
+
+	c := make(vcard.Card)
+	c.SetValue(vcard.FieldVersion, "3.0")
+	c.AddValue(vcard.FieldUID, "uid-a")
+	c.AddValue(vcard.FieldUID, "uid-b")
+	c.SetValue(vcard.FieldFormattedName, "Alice Dup")
+
+	if _, err := backend.PutAddressObject(ctx, "/alice/contacts/a.vcf", c, &gocarddav.PutAddressObjectOptions{}); err == nil {
+		t.Fatal("PutAddressObject duplicate UID fields error = nil, want error")
+	}
+}
+
 func TestBackend_QueryAddressObjects_NilQueryReturnsAll(t *testing.T) {
 	t.Parallel()
 
