@@ -175,17 +175,17 @@ func printDaemonHelp(w io.Writer, prog string) {
 	_, _ = fmt.Fprintf(w, "usage: %s [flags]\n", prog)
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "flags:")
-	_, _ = fmt.Fprintln(w, `  -l, --listen-addr addr        listen address (default ":8080")`)
-	_, _ = fmt.Fprintln(w, "  -p, --port port               listen on :PORT (cannot combine with -l/--listen-addr)")
-	_, _ = fmt.Fprintln(w, `  -d, --db-path path            sqlite database path (default "/var/db/contactd.db")`)
-	_, _ = fmt.Fprintln(w, "      --base-url url            public base URL for redirects")
-	_, _ = fmt.Fprintln(w, "      --log-level level         log level: debug|info|warn|error")
-	_, _ = fmt.Fprintln(w, "      --log-format fmt          log format: text|json")
-	_, _ = fmt.Fprintln(w, "      --auth-max-concurrency n  max concurrent auth checks (0 disables)")
-	_, _ = fmt.Fprintln(w, "      --auth-fail-delay dur     delay failed auth responses (0 disables)")
-	_, _ = fmt.Fprintln(w, "      --trust-proxy-headers     trust X-Forwarded-* headers")
-	_, _ = fmt.Fprintln(w, "  -V, --version                 print version and exit")
-	_, _ = fmt.Fprintln(w, "  -h, --help                    print help and exit")
+	printHelpFlag(w, "-l, --listen-addr addr", `listen address (default ":8080")`)
+	printHelpFlag(w, "-p, --port port", "listen on :PORT (cannot combine with -l/--listen-addr)")
+	printHelpFlag(w, "-d, --db-path path", `sqlite database path (default "/var/db/contactd.db")`)
+	printHelpFlag(w, "--base-url url", "public base URL for redirects")
+	printHelpFlag(w, "--log-level level", "log level: debug|info|warn|error")
+	printHelpFlag(w, "--log-format fmt", "log format: text|json")
+	printHelpFlag(w, "--auth-max-concurrency n", "max concurrent auth checks (0 disables)")
+	printHelpFlag(w, "--auth-fail-delay dur", "delay failed auth responses (0 disables)")
+	printHelpFlag(w, "--trust-proxy-headers", "trust X-Forwarded-* headers")
+	printHelpFlag(w, "-V, --version", "print version and exit")
+	printHelpFlag(w, "-h, --help", "print help and exit")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "environment:")
 	_, _ = fmt.Fprintln(w, "  core:")
@@ -208,6 +208,10 @@ func printDaemonHelp(w io.Writer, prog string) {
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "admin commands:")
 	_, _ = fmt.Fprintln(w, "  use contactctl user <add|list|delete|passwd>")
+}
+
+func printHelpFlag(w io.Writer, flagSpec, desc string) {
+	_, _ = fmt.Fprintf(w, "  %-30s %s\n", flagSpec, desc)
 }
 
 func printVersionHelp(w io.Writer, prog string) {
