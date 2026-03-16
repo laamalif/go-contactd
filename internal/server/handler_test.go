@@ -1495,6 +1495,36 @@ func TestHandler_CardPut_ControlByteInPayloadRejected(t *testing.T) {
 	}
 }
 
+func TestHandler_CardPut_FoldedLineLiteralEndVCardAccepted(t *testing.T) {
+	t.Parallel()
+
+	store, backend := openServerBackend(t)
+	defer func() { _ = store.Close() }()
+	seedServerUserBook(t, store, "alice", "contacts", "Contacts")
+	h := server.NewHandler(server.HandlerOptions{
+		Backend: backend,
+		Sync:    carddavx.NewSyncService(store),
+		Authenticate: func(_ context.Context, username, password string) (string, bool, error) {
+			if username == "alice" && password == "secret" {
+				return "alice", true, nil
+			}
+			return "", false, nil
+		},
+		AttachPrincipal: contactcarddav.WithPrincipal,
+	})
+
+	body := "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:uid-folded-end\r\nFN:Folded End Marker\r\nNOTE:prefix\r\n END:VCARD\r\nEND:VCARD\r\n"
+	req := httptest.NewRequest(http.MethodPut, "/alice/contacts/folded-end.vcf", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "text/vcard")
+	req.SetBasicAuth("alice", "secret")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got, want := rr.Code, http.StatusCreated; got != want {
+		t.Fatalf("PUT folded END:VCARD continuation status = %d, want %d body=%q", got, want, rr.Body.String())
+	}
+}
+
 func TestHandler_CardPut_OversizeBodyReturns413(t *testing.T) {
 	t.Parallel()
 

@@ -1752,9 +1752,13 @@ func validateSingleVCardEnvelope(raw []byte) error {
 	seenEnd := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		folded := len(line) > 0 && (line[0] == ' ' || line[0] == '\t')
 		if !seenBegin {
 			if trimmed == "" {
 				continue
+			}
+			if folded {
+				return fmt.Errorf("unexpected folded content before BEGIN:VCARD")
 			}
 			if strings.EqualFold(trimmed, "BEGIN:VCARD") {
 				seenBegin = true
@@ -1763,7 +1767,7 @@ func validateSingleVCardEnvelope(raw []byte) error {
 			return fmt.Errorf("unexpected data before BEGIN:VCARD")
 		}
 		if !seenEnd {
-			if strings.EqualFold(trimmed, "END:VCARD") {
+			if !folded && strings.EqualFold(trimmed, "END:VCARD") {
 				seenEnd = true
 			}
 			continue
