@@ -721,8 +721,7 @@ func TestRunCLI_ImportConcatFile_InvalidUIDHrefReturnsError(t *testing.T) {
 }
 
 func TestRunCLI_ImportConcatFile_RejectsTotalInputOverCap(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: mutates package-level importConcatMaxBytesDefault.
 	oldCap := importConcatMaxBytesDefault
 	importConcatMaxBytesDefault = 128
 	defer func() { importConcatMaxBytesDefault = oldCap }()
