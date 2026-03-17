@@ -1,4 +1,4 @@
-.Dd February 24, 2026
+.Dd March 17, 2026
 .Dt CONTACTCTL 8
 .Os
 .Sh NAME
@@ -7,8 +7,8 @@
 .Sh SYNOPSIS
 .Nm
 .Cm user
-.Aq add|list|delete|passwd
-.Op Ar args ...
+.Aq Cm add Ns | Ns Cm list Ns | Ns Cm delete Ns | Ns Cm passwd
+.Op Ar flags ...
 .Nm
 .Cm export
 .Op Ar flags ...
@@ -18,127 +18,188 @@
 .Ar file-or-dir
 .Nm
 .Cm version
-.Op Fl -format Ar text|json
+.Op Fl -format Ar text Ns | Ns Ar json
 .Sh DESCRIPTION
 .Nm
 manages users and imports/exports vCards for
+.Xr contactd 8 .
+It operates directly on the SQLite database and does not require
 .Nm contactd
-.Pq 8 .
-It is intended for local administration and scripting.
+to be running.
 .Pp
-User-management subcommands operate directly on the SQLite database.
-The export/import commands are useful for backups, test fixtures, and cloning
-datasets across multiple users.
+.Nm
+may be invoked as a standalone binary or as a symlink to the
+.Nm contactd
+binary.
 .Sh COMMANDS
-.Bl -tag -width "import"
-.It Cm user add
-Create a user.
-Supports
-.Fl -password-stdin
-to avoid password exposure in process listings.
-.It Cm user list
-List users in table or JSON format.
-.It Cm user delete
-Delete a user by
-.Fl -username
-or
-.Fl -id .
-.It Cm user passwd
-Update a user's password by
-.Fl -username
-or
-.Fl -id .
-.It Cm export
-Export an addressbook as vCards.
-Directory mode writes one
-.Pa .vcf
-file per card; concat mode writes concatenated vCards.
-.It Cm import
-Import vCards from a directory of
-.Pa .vcf
-files or from a concatenated vCard file.
-Directory imports use the filename as the CardDAV href.
-Single-file imports use
-.Aq UID Ns Pa .vcf
-as the href.
+.Ss user add
+Create a user account.
+.Pp
+.Bl -tag -width Ds -compact
+.It Fl -username Ar name
+Username (required).
+.It Fl -password Ar pass
+Password (avoid on shared systems; prefer
+.Fl -password-stdin ) .
+.It Fl -password-stdin
+Read password from standard input, one line.
+.It Fl d , Fl -db-path Ar path , Fl -db Ar path
+Database path.
 .El
-.Sh COMMON OPTIONS
-.Bl -tag -width Ds
-.It Fl d , Fl -db-path Ar path
-SQLite database path.
+.Ss user list
+List all users.
+.Pp
+.Bl -tag -width Ds -compact
+.It Fl -format Ar table Ns | Ns Ar json
+Output format.
 Default:
-.Pa /var/db/contactd.db .
-.It Fl -db Ar path
-Alias for
-.Fl -db-path .
+.Cm table .
+.It Fl d , Fl -db-path Ar path , Fl -db Ar path
+Database path.
+.El
+.Ss user delete
+Delete a user by username or numeric ID.
+.Pp
+.Bl -tag -width Ds -compact
+.It Fl -username Ar name
+Select user by username.
+.It Fl -id Ar n
+Select user by numeric ID.
+.It Fl d , Fl -db-path Ar path , Fl -db Ar path
+Database path.
+.El
+.Ss user passwd
+Update a user's password.
+.Pp
+.Bl -tag -width Ds -compact
+.It Fl -username Ar name
+Select user by username.
+.It Fl -id Ar n
+Select user by numeric ID.
+.It Fl -password Ar pass
+New password.
+.It Fl -password-stdin
+Read new password from standard input.
+.It Fl d , Fl -db-path Ar path , Fl -db Ar path
+Database path.
+.El
+.Ss export
+Export an addressbook's vCards.
+.Pp
+.Bl -tag -width Ds -compact
+.It Fl -username Ar name
+User whose addressbook is exported (required).
+.It Fl -book Ar slug
+Addressbook slug.
+Default:
+.Cm contacts .
+.It Fl -format Ar dir Ns | Ns Ar concat
+Output format.
+.Cm dir
+writes one
+.Pa <href>.vcf
+file per card into
+.Fl -out ;
+.Cm concat
+writes concatenated vCards to stdout or
+.Fl -out .
+Default:
+.Cm dir .
+.It Fl -out Ar path
+Output directory
+.Pq Cm dir
+or file
+.Pq Cm concat .
+Required for
+.Cm dir
+format.
 .It Fl -dry-run
-Validate and summarize without writing files
-.Pq export
-or database changes
-.Pq import .
-.It Fl V , Fl -version
-Print version and exit.
-.It Fl h , Fl -help
-Print help and exit.
+Validate and summarize without writing any files.
+.It Fl d , Fl -db-path Ar path , Fl -db Ar path
+Database path.
 .El
-.Sh EXPORT
-.Bl -tag -width Ds
-.It Cm contactctl export Fl -username Ar user Op Fl -book Ar slug Op Fl -format Ar dir|concat Op Fl -out Ar path Op Fl -dry-run
-Export vCards from the selected addressbook.
+.Ss import
+Import vCards into an addressbook.
 .Pp
-If
-.Fl -format Cm dir
-is used,
-.Fl -out
-must name a directory.
-Files are written with mode 0600.
-.Pp
-If
-.Fl -format Cm concat
-is used and
-.Fl -out
-is omitted, the vCard payload is written to standard output.
-.El
-.Sh IMPORT
-.Bl -tag -width Ds
-.It Cm contactctl import Fl -username Ar user Op Fl -book Ar slug Op Fl -dry-run Ar path
-Import vCards into the selected addressbook.
-.Pp
-If
-.Ar path
-is a directory, all
+.Bl -tag -width Ds -compact
+.It Fl -username Ar name
+User whose addressbook receives the import (required).
+.It Fl -book Ar slug
+Addressbook slug.
+Default:
+.Cm contacts .
+.It Fl -dry-run
+Parse and validate without writing to the database.
+Advisory only: concurrent writes by
+.Nm contactd
+can alter the real import result.
+.It Fl d , Fl -db-path Ar path , Fl -db Ar path
+Database path.
+.It Ar file-or-dir
+Source path (required).
+If a directory, all
 .Pa *.vcf
-files are imported.
-If
-.Ar path
-is a file, concatenated vCards are parsed using
-.Dq go-vcard .
-.Pp
-Cards without a
+files are imported and the filename becomes the CardDAV href.
+If a file, concatenated vCards are parsed and each card's
 .Dq UID
-field are rejected.
+field becomes the href
+.Pq Ar UID Ns Pa .vcf .
+.El
+.Ss version
+Print version information and exit.
+.Pp
+.Bl -tag -width Ds -compact
+.It Fl -format Ar text Ns | Ns Ar json
+Output format.
+Default:
+.Cm text .
+.El
+.Sh EXIT STATUS
+.Bl -tag -width Ds
+.It 0
+Success.
+.It 1
+Runtime or I/O error.
+.It 2
+Usage or configuration error.
+.It 3
+Not found (e.g.\& unknown user or addressbook).
 .El
 .Sh EXAMPLES
 .Bl -bullet -compact
 .It
-Create a user:
+Create a user, reading the password from stdin:
 .Bd -literal -offset indent
 printf '%s\en' 'secret' | contactctl user add --username alice --password-stdin
 .Ed
 .It
-Export a user's addressbook to a directory:
+List all users as JSON:
+.Bd -literal -offset indent
+contactctl user list --format json
+.Ed
+.It
+Change a user's password:
+.Bd -literal -offset indent
+printf '%s\en' 'newpass' | contactctl user passwd --username alice --password-stdin
+.Ed
+.It
+Export an addressbook to a directory:
 .Bd -literal -offset indent
 contactctl export --username alice --format dir --out ./backup
 .Ed
 .It
 Preview an import without writing:
 .Bd -literal -offset indent
-contactctl import --username bob --dry-run ./backup
+contactctl import --username alice --dry-run ./backup
+.Ed
+.It
+Import a concatenated vCard file:
+.Bd -literal -offset indent
+contactctl import --username alice contacts.vcf
 .Ed
 .El
 .Sh SEE ALSO
-.Nm contactd
-.Pq 8
+.Xr contactd 8
 .Sh AUTHORS
 This project uses
 .Lk https://github.com/emersion/go-webdav go-webdav

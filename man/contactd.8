@@ -1,4 +1,4 @@
-.Dd February 24, 2026
+.Dd March 17, 2026
 .Dt CONTACTD 8
 .Os
 .Sh NAME
@@ -13,15 +13,29 @@
 .Op Fl -base-url Ar url
 .Op Fl -log-level Ar level
 .Op Fl -log-format Ar fmt
+.Op Fl -auth-max-concurrency Ar n
+.Op Fl -auth-fail-delay Ar dur
 .Op Fl -trust-proxy-headers
 .Sh DESCRIPTION
 .Nm
-serves a CardDAV endpoint over HTTP and stores data in SQLite.
+serves a CardDAV endpoint over HTTP and stores contact data in SQLite.
 It is intended to run behind a reverse proxy that terminates TLS.
 .Pp
-The daemon provides a single health endpoint,
-.Pa /health ,
-which performs an HTTP + SQLite check.
+Invoking
+.Nm
+without arguments starts the daemon using environment variables and
+built-in defaults.
+The subcommand
+.Cm serve
+is accepted as a backward-compatible alias.
+.Pp
+The daemon exposes a single health endpoint at
+.Pa /health
+which returns 200 when the database is reachable and 503 otherwise.
+The
+.Pa /.well-known/carddav
+path redirects to the DAV root without requiring authentication,
+as required by RFC 6764.
 .Sh OPTIONS
 .Bl -tag -width Ds
 .It Fl h , Fl -help
@@ -29,12 +43,15 @@ Print usage and exit.
 .It Fl V , Fl -version
 Print version and exit.
 .It Fl l , Fl -listen-addr Ar addr
-Listen address (for example
-.Sq :8080
-or
-.Sq 127.0.0.1:8080 ) .
+Listen address in
+.Ar host:port
+form.
+Default:
+.Sq :8080 .
+Cannot be combined with
+.Fl p .
 .It Fl p , Fl -port Ar port
-Convenience shorthand for listening on
+Convenience shorthand: listen on
 .Sq :PORT .
 Cannot be combined with
 .Fl l .
@@ -43,67 +60,165 @@ SQLite database path.
 Default:
 .Pa /var/db/contactd.db .
 .It Fl -base-url Ar url
-Public base URL used for redirects (for example
-.Pa /.well-known/carddav ) .
+Public base URL used for the
+.Pa /.well-known/carddav
+redirect.
+When unset the redirect target is
+.Pa / .
 .It Fl -log-level Ar level
-Log level:
+Log verbosity:
 .Cm debug ,
 .Cm info ,
 .Cm warn ,
 or
 .Cm error .
+Default:
+.Cm info .
 .It Fl -log-format Ar fmt
 Log format:
 .Cm text
-(daemon-style) or
+(daemon-style, syslog-compatible) or
 .Cm json .
+Default:
+.Cm text .
+.It Fl -auth-max-concurrency Ar n
+Maximum number of authentication checks that may run concurrently.
+Additional requests block until a slot is free or the request context
+is cancelled.
+Set to 0 to disable the cap.
+Default: 8.
+.It Fl -auth-fail-delay Ar dur
+Duration to hold a failed-authentication response before replying,
+expressed as a Go duration string (e.g.\&
+.Sq 500ms ,
+.Sq 1s ) .
+Adds backpressure against credential-spray attacks.
+Set to 0 to disable.
+Default: 0.
 .It Fl -trust-proxy-headers
 Trust
-.Dq X-Forwarded-*
-and related proxy headers for access-log remote address handling.
-Enable only behind a trusted reverse proxy.
+.Sq X-Forwarded-For ,
+.Sq X-Real-IP ,
+and related proxy headers when recording the remote address in access
+logs.
+Enable only when
+.Nm
+is behind a trusted reverse proxy.
 .El
 .Sh ENVIRONMENT
-Configuration precedence is:
-flags > environment > defaults.
-.Pp
-Common variables:
+Configuration precedence is: flags > environment > defaults.
+.Ss Core
 .Bl -tag -width Ds
 .It Ev CONTACTD_LISTEN_ADDR
 Listen address.
 .It Ev PORT
-Fallback port if
+Fallback port when
 .Ev CONTACTD_LISTEN_ADDR
 is unset.
 .It Ev CONTACTD_DB_PATH
 SQLite database path.
 .It Ev CONTACTD_BASE_URL
 Public base URL for redirects.
+.El
+.Ss Logging
+.Bl -tag -width Ds
 .It Ev CONTACTD_LOG_LEVEL
-Log level.
+Log level
+.Pq Cm debug Ns / Ns Cm info Ns / Ns Cm warn Ns / Ns Cm error .
 .It Ev CONTACTD_LOG_FORMAT
 Log format
 .Pq Cm text Ns / Ns Cm json .
 .It Ev CONTACTD_TRUST_PROXY_HEADERS
-Trust proxy headers.
+Trust proxy headers
+.Pq Cm true Ns / Ns Cm false .
+.El
+.Ss Auth hardening
+.Bl -tag -width Ds
+.It Ev CONTACTD_AUTH_MAX_CONCURRENCY
+Maximum concurrent auth checks.
+.It Ev CONTACTD_AUTH_FAIL_DELAY
+Failed-auth response delay (Go duration string).
+.El
+.Ss Limits
+.Bl -tag -width Ds
 .It Ev CONTACTD_REQUEST_MAX_BYTES
-Request body limit.
+Maximum request body size in bytes.
+Default: 10485760 (10 MiB).
 .It Ev CONTACTD_VCARD_MAX_BYTES
-Maximum stored vCard size.
+Maximum stored vCard size in bytes.
+Default: 10485760 (10 MiB).
+.El
+.Ss Bootstrap
+.Bl -tag -width Ds
 .It Ev CONTACTD_USERS
-Bootstrap user seed (empty DB only, unless forced).
+Semicolon-separated list of
+.Ar username:bcrypt-hash
+pairs to seed on startup (empty database only, unless
+.Ev CONTACTD_FORCE_SEED
+is set).
+.It Ev CONTACTD_USER_*
+Per-user seed variables.
 .It Ev CONTACTD_FORCE_SEED
-Re-apply seed users even when the DB already has users.
+Re-apply seed users even when the database already has users
+.Pq Cm true Ns / Ns Cm false .
+.It Ev CONTACTD_DEFAULT_BOOK_SLUG
+URL slug for the default addressbook created for each seeded user.
+Default:
+.Cm contacts .
+.It Ev CONTACTD_DEFAULT_BOOK_NAME
+Display name for the default addressbook.
+Default:
+.Cm Contacts .
+.El
+.Ss Retention and maintenance
+.Bl -tag -width Ds
+.It Ev CONTACTD_CHANGE_RETENTION_DAYS
+Prune sync-journal entries older than this many days.
+Default: 180.
+.It Ev CONTACTD_CHANGE_RETENTION_MAX_REVISIONS
+Prune sync-journal entries beyond this maximum revision count per
+addressbook.
+0 disables the cap.
+.It Ev CONTACTD_PRUNE_INTERVAL
+How often the background prune task runs, as a Go duration string.
+Default:
+.Cm 24h .
+.El
+.Ss Feature flags
+.Bl -tag -width Ds
+.It Ev CONTACTD_ENABLE_ADDRESSBOOK_COLOR
+Enable the
+.Sq http://inf-it.com/ns/ab/
+addressbook-color PROPPATCH/PROPFIND extension
+.Pq Cm true Ns / Ns Cm false .
+Default: false.
 .El
 .Sh FILES
 .Bl -tag -width Ds
 .It Pa /var/db/contactd.db
 Default SQLite database path.
 .El
+.Sh EXIT STATUS
+.Bl -tag -width Ds
+.It 0
+Daemon exited cleanly after receiving
+.Dv SIGTERM
+or
+.Dv SIGINT .
+.It 1
+Runtime error (listen failure, shutdown error).
+.It 2
+Startup error (bad configuration, database open failure).
+.El
 .Sh EXAMPLES
 .Bl -bullet -compact
 .It
-Run on localhost:
+Run with defaults:
+.Bd -literal -offset indent
+contactd
+.Ed
+.It
+Listen on a specific address with a custom database:
 .Bd -literal -offset indent
 contactd -l 127.0.0.1:8080 -d /var/db/contactd.db
 .Ed
@@ -112,10 +227,14 @@ Check daemon health:
 .Bd -literal -offset indent
 curl http://127.0.0.1:8080/health
 .Ed
+.It
+Seed a user on first start:
+.Bd -literal -offset indent
+CONTACTD_USERS="alice:$HASH" contactd
+.Ed
 .El
 .Sh SEE ALSO
-.Nm contactctl
-.Pq 8
+.Xr contactctl 8
 .Sh AUTHORS
 This project uses
 .Lk https://github.com/emersion/go-webdav go-webdav
