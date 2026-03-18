@@ -1,6 +1,6 @@
 # go-contactd
 
-Minimal CardDAV server for DAVx5 using Go and SQLite (WAL).
+A lightweight, DAVx5-compatible CardDAV server written in Go and powered by SQLite.
 
 ## Status
 
