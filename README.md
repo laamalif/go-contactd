@@ -4,17 +4,9 @@ A lightweight, DAVx5-compatible CardDAV server written in Go and powered by SQLi
 
 ## Status
 
-- SQLite only (`modernc.org/sqlite`)
-- Basic Auth (DB-backed at runtime; env seed is bootstrap-only)
-- CardDAV core flows + `sync-collection` + `PROPFIND`/`PROPPATCH` extensions
+- Basic Auth. Credentials are DB-backed at runtime and bootstrapped via environment variables on first run.
+- CardDAV core flows, including `sync-collection`, `PROPFIND`, and `PROPPATCH` extensions.
 - HTTP service behind reverse proxy (TLS terminated upstream)
-
-## Upstream Libraries
-
-- `github.com/emersion/go-vcard` (vCard parsing/encoding)
-- `github.com/emersion/go-webdav` (WebDAV/CardDAV protocol support)
-
-Both projects are by Simon Ser (`emersion`).
 
 ## Quick Start (Docker)
 
